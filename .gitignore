@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+logs/
+vault/
+.env
+config.json
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+CLAUDE.md
+docs/
+migrate.py
+assets/*.png

@@ -1,0 +1,7 @@
+{
+    "model": "haiku",
+    "vault_path": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
+    "log_level": "INFO",
+    "push_vault_to_remote": true,
+    "emit_docs_solutions": true
+}

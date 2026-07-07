@@ -12,6 +12,21 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import os
+import sys
+
+# Optionaler kooperativer VRAM-Broker. Pfad kommt aus der Umgebung
+# (GPU_BROKER_PATH), damit kein maschinenspezifischer Pfad im Repo landet.
+# Nicht gesetzt / nicht importierbar -> _gpu=None -> Embedding läuft wie bisher.
+_gpu = None
+_broker_path = os.environ.get("GPU_BROKER_PATH")
+if _broker_path and _broker_path not in sys.path:
+    sys.path.insert(0, _broker_path)
+try:
+    from gpu_broker import broker as _gpu
+except Exception:
+    _gpu = None
+
 OLLAMA_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 EMBED_FILE = "_embeddings.json"  # lives next to _tag_index.json in the vault
@@ -21,6 +36,14 @@ def embed_text(text: str, *, prefix: str = "", timeout: float = 3.0):
     """Return an embedding vector (list[float]) or None on any failure."""
     if not text:
         return None
+    tok = None
+    if _gpu:
+        try:
+            tok = _gpu.acquire("cha0sbrain-embed", block=False)
+        except Exception:
+            tok = "noop"
+        if not tok:
+            return None
     try:
         body = json.dumps({"model": EMBED_MODEL, "prompt": prefix + text}).encode("utf-8")
         req = urllib.request.Request(
@@ -34,6 +57,12 @@ def embed_text(text: str, *, prefix: str = "", timeout: float = 3.0):
         return vec if isinstance(vec, list) and vec else None
     except Exception:
         return None
+    finally:
+        if _gpu and tok and tok != "noop":
+            try:
+                _gpu.release(tok)
+            except Exception:
+                pass
 
 
 def load_embeddings(vault_path: str) -> dict:

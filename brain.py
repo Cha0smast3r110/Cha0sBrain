@@ -301,6 +301,7 @@ def process_session(
     # 5. TELEMETRY (best-effort, never blocks)
     try:
         learnings = telemetry.detect_learnings_consumed(session_data["tool_calls"])
+        injected = telemetry.detect_injected_entries(session_id)
         record = telemetry.build_record(
             session_id=session_id,
             workstation_name=None,
@@ -311,6 +312,7 @@ def process_session(
             stylecheck_retries=write_result.stylecheck_retries,
             quarantined=write_result.quarantined,
             learnings_consumed=learnings,
+            learnings_injected=injected,
             refusals=write_result.refusals,
         )
         telemetry.append_telemetry(vault_path, record)

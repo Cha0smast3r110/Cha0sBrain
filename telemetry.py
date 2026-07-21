@@ -7,6 +7,7 @@ consumer (example-dashboard) and joined by session_id.
 
 import json
 import logging
+import os
 import socket
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,25 @@ ENTRY_TYPES = ("anleitung", "troubleshooting", "recherche")
 
 _SOLUTIONS_MARKER = "/docs/solutions/"
 _VAULT_MARKER = "/cha0sbrain-vault/"
+HOME_CLAUDE = Path(os.path.expanduser("~/.claude"))
+
+
+def detect_injected_entries(session_id: str) -> list[str]:
+    """Return the vault refs injected into this session's prompts.
+
+    Reads the per-session dedup file written by prompt_inject.py
+    (~/.claude/.cha0sbrain-injected-<sanitized>.json), a JSON list of refs.
+    This is the retrieval-throughput signal for the prompt-inject path, which
+    detect_learnings_consumed cannot see (injected content triggers no Read).
+    Never raises: any error -> empty list.
+    """
+    try:
+        safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+        path = HOME_CLAUDE / f".cha0sbrain-injected-{safe}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return []
 
 
 def _learning_stem(file_path: str) -> str | None:
@@ -102,6 +122,7 @@ def build_record(
     stylecheck_retries: int,
     quarantined: list[str],
     learnings_consumed: list[str],
+    learnings_injected: list[str] | None = None,
     refusals: list[dict] | None = None,
     emitted_at: str | None = None,
 ) -> dict:
@@ -125,6 +146,7 @@ def build_record(
         "stylecheck_retries": int(stylecheck_retries),
         "quarantined": list(quarantined),
         "learnings_consumed_hints": list(learnings_consumed),
+        "learnings_injected": list(learnings_injected or []),
         "refusals": list(refusals or []),
     }
 

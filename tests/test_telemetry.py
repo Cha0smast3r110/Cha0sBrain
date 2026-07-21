@@ -47,6 +47,7 @@ def test_build_record_contains_all_contract_fields():
         "stylecheck_retries",
         "quarantined",
         "learnings_consumed_hints",
+        "learnings_injected",
         "refusals",
     }
 
@@ -337,3 +338,35 @@ def test_build_record_refusals_defaults_to_empty_list():
         emitted_at="2026-05-08T12:00:00+00:00",
     )
     assert record["refusals"] == []
+
+
+def test_detect_injected_entries_reads_dedup_file(tmp_path, monkeypatch):
+    # Point telemetry's HOME_CLAUDE at a temp dir and drop a dedup file there.
+    monkeypatch.setattr(telemetry, "HOME_CLAUDE", tmp_path, raising=False)
+    sid = "sess-99"
+    safe = "".join(c for c in sid if c.isalnum() or c in "-_")
+    (tmp_path / f".cha0sbrain-injected-{safe}.json").write_text(
+        json.dumps(["wing/a.md", "wing/b.md"]), encoding="utf-8"
+    )
+    assert telemetry.detect_injected_entries(sid) == ["wing/a.md", "wing/b.md"]
+
+
+def test_detect_injected_entries_missing_file_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(telemetry, "HOME_CLAUDE", tmp_path, raising=False)
+    assert telemetry.detect_injected_entries("no-such-session") == []
+
+
+def test_build_record_includes_learnings_injected():
+    record = telemetry.build_record(
+        session_id="abc-123",
+        workstation_name="test-host",
+        project_cwd="/home/user/Project",
+        topics=_topics("anleitung"),
+        written=_written("foo"),
+        docs_solutions_emitted=[],
+        stylecheck_retries=0,
+        quarantined=[],
+        learnings_consumed=[],
+        learnings_injected=["wing/a.md"],
+    )
+    assert record["learnings_injected"] == ["wing/a.md"]

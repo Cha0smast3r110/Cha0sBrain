@@ -51,14 +51,23 @@ def main() -> int:
         current_refs.add(ref)
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()
         existing = embeddings.get(ref)
-        if isinstance(existing, dict) and existing.get("hash") == digest and existing.get("vec"):
+        # Modell-Tag im Skip-Check: ein Modellwechsel (nomic 768 -> LFM 1024)
+        # ändert den Text-Hash NICHT, würde also fälschlich skippen und alte,
+        # dimensions-inkompatible Vektoren behalten. Nur skippen, wenn Hash UND
+        # Modell übereinstimmen -> erster LFM-Lauf bettet alles neu ein.
+        if (
+            isinstance(existing, dict)
+            and existing.get("hash") == digest
+            and existing.get("model") == semantic.EMBED_MODEL
+            and existing.get("vec")
+        ):
             skipped += 1
             continue
-        vec = semantic.embed_text(text, prefix="search_document: ")
+        vec = semantic.embed_text(text, prefix="document: ")
         if vec is None:
             failed += 1
             continue
-        embeddings[ref] = {"vec": vec, "hash": digest}
+        embeddings[ref] = {"vec": vec, "hash": digest, "model": semantic.EMBED_MODEL}
         added += 1
 
     removed = 0

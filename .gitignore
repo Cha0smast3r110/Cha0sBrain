@@ -10,3 +10,4 @@ CLAUDE.md
 docs/
 migrate.py
 assets/*.png
+models/

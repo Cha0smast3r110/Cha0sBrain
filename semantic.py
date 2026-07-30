@@ -1,8 +1,15 @@
 """Optional semantic-similarity layer for vault retrieval.
 
-Uses a local Ollama nomic-embed-text model to embed entry descriptions and
-prompts. EVERY function is best-effort: returns None/{} on any error and never
-raises, because callers run inside the never-block UserPromptSubmit hook.
+Uses a local LFM2.5-Embedding-350M model served via a llama.cpp llama-server
+(--embeddings, CPU) to embed entry descriptions and prompts. EVERY function is
+best-effort: returns None/{} on any error and never raises, because callers run
+inside the never-block UserPromptSubmit hook.
+
+LFM ersetzt seit 2026-07-30 nomic-embed-text: eine faire A/B-Eval auf dem echten
+Vault (eval/embed-ab/RESULTS.md) zeigte LFM auf allen Retrieval-Metriken massiv
+besser (nDCG@5 0.66 vs 0.15) — nomic trennte auf kurzen DE/EN-Beschreibungen
+kaum. LFM lädt in Ollama 0.20.3 nicht (missing tensor 'output_norm'), daher der
+Umstieg auf llama.cpp-Serving statt des alten Ollama-/api/embeddings-Pfads.
 """
 from __future__ import annotations
 
@@ -13,56 +20,36 @@ import urllib.request
 from pathlib import Path
 
 import os
-import sys
 
-# Optionaler kooperativer VRAM-Broker. Pfad kommt aus der Umgebung
-# (GPU_BROKER_PATH), damit kein maschinenspezifischer Pfad im Repo landet.
-# Nicht gesetzt / nicht importierbar -> _gpu=None -> Embedding läuft wie bisher.
-_gpu = None
-_broker_path = os.environ.get("GPU_BROKER_PATH")
-if _broker_path and _broker_path not in sys.path:
-    sys.path.insert(0, _broker_path)
-try:
-    from gpu_broker import broker as _gpu
-except Exception:
-    _gpu = None
-
-OLLAMA_URL = "http://localhost:11434/api/embeddings"
-EMBED_MODEL = "nomic-embed-text"
+# llama.cpp llama-server (--embeddings). Endpoint per Env überschreibbar, damit
+# kein maschinenspezifischer Port im Repo klemmt. Body: {"content": <text>},
+# Antwort: [{"embedding": [...]}] (llama.cpp schachtelt pro Pool eine Ebene).
+LLAMACPP_URL = os.environ.get("CHA0SBRAIN_EMBED_URL", "http://127.0.0.1:11500/embedding")
+EMBED_MODEL = "LFM2.5-Embedding-350M"  # informativ + Modell-Tag im Embedding-Cache
+EMBED_DIM = 1024
 EMBED_FILE = "_embeddings.json"  # lives next to _tag_index.json in the vault
 
 
-def embed_text(text: str, *, prefix: str = "", timeout: float = 3.0):
+def embed_text(text: str, *, prefix: str = "", timeout: float = 5.0):
     """Return an embedding vector (list[float]) or None on any failure."""
     if not text:
         return None
-    tok = None
-    if _gpu:
-        try:
-            tok = _gpu.acquire("cha0sbrain-embed", block=False)
-        except Exception:
-            tok = "noop"
-        if not tok:
-            return None
     try:
-        body = json.dumps({"model": EMBED_MODEL, "prompt": prefix + text}).encode("utf-8")
+        body = json.dumps({"content": prefix + text}).encode("utf-8")
         req = urllib.request.Request(
-            OLLAMA_URL,
+            LLAMACPP_URL,
             data=body,
             headers={"Content-Type": "application/json"},
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        vec = data.get("embedding")
+        obj = data[0] if isinstance(data, list) else data
+        vec = obj.get("embedding") if isinstance(obj, dict) else None
+        if vec and isinstance(vec[0], list):  # llama.cpp schachtelt pro Token/Pool
+            vec = vec[0]
         return vec if isinstance(vec, list) and vec else None
     except Exception:
         return None
-    finally:
-        if _gpu and tok and tok != "noop":
-            try:
-                _gpu.release(tok)
-            except Exception:
-                pass
 
 
 def load_embeddings(vault_path: str) -> dict:
@@ -90,7 +77,7 @@ def cosine(a, b) -> float:
         return 0.0
 
 
-def semantic_neighbors(query_vec, embeddings: dict, *, top_k: int = 6, min_sim: float = 0.62) -> dict:
+def semantic_neighbors(query_vec, embeddings: dict, *, top_k: int = 6, min_sim: float = 0.42) -> dict:
     """ref -> similarity for the top_k entries above min_sim. {} if no query_vec."""
     if not query_vec or not embeddings:
         return {}

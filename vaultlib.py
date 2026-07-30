@@ -29,7 +29,9 @@ _WORD_RE = re.compile(r"[a-zA-Z0-9]+")
 # Similarity floor for the semantic layer. Must match the default min_sim of
 # semantic.semantic_neighbors — a neighbor at exactly this similarity gets a
 # semantic_bonus of min_score (just clears the threshold); above it, more.
-SEMANTIC_FLOOR_SIM = 0.62
+# Auf LFM2.5-Embedding kalibriert (2026-07-30): dessen relevante Cosine-Werte
+# liegen ~0.50, irrelevante ~0.41 (Eval eval/embed-ab/RESULTS.md) — Floor 0.42.
+SEMANTIC_FLOOR_SIM = 0.42
 
 
 def tokenize(text: str) -> set[str]:
@@ -194,7 +196,7 @@ def select_entries(
 
             embeddings = semantic.load_embeddings(vault_path)
             if embeddings:
-                qvec = semantic.embed_text(prompt, prefix="search_query: ")
+                qvec = semantic.embed_text(prompt, prefix="query: ")
                 if qvec:
                     neighbors = semantic.semantic_neighbors(qvec, embeddings)
                     for ref in neighbors:
@@ -216,9 +218,9 @@ def select_entries(
         # A purely semantic match (no tag/text overlap) must be able to clear
         # min_score on its own — otherwise the L3 capability is dead. So a
         # neighbor gets a floor of min_score plus a similarity-scaled term for
-        # ranking. nomic-embed-text similarities on short German descriptions
-        # cluster tightly (~0.62-0.70), hence the gain on (sim - floor_sim)
-        # rather than on raw sim.
+        # ranking. LFM2.5-Embedding similarities on short German descriptions
+        # sit around ~0.42-0.55, hence the gain on (sim - floor_sim) rather than
+        # on raw sim.
         semantic_bonus = round(min_score + 8.0 * (sim - SEMANTIC_FLOOR_SIM), 2) if sim else 0.0
         score = 3 * tagword_hits + 1 * text_hits + project_bonus + semantic_bonus
         if score < min_score:

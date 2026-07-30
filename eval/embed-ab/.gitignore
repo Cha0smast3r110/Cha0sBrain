@@ -1,0 +1,9 @@
+# Große Artefakte + private, vault-abgeleitete Daten NICHT ins öffentliche Repo.
+# Reproduzierbar via harness.py auf dem (privaten) Vault. Lokal bleiben:
+*.gguf
+emb_*.json
+pool.json
+ranks_*.json
+labels.json
+queries.json
+RESULTS.md

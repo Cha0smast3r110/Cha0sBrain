@@ -25,6 +25,7 @@ from collector import parse_session, collect_git_changes, derive_project_id
 from analyzer import analyze_session
 from writer import write_entries
 from indexer import update_indexes
+import semantic
 import telemetry
 
 # Setup paths
@@ -108,6 +109,68 @@ def load_existing_wings(vault_path: str) -> dict:
 
 
 PROCESSED_SESSIONS_FILE = LOG_DIR / "processed_sessions.json"
+
+NEAR_DUPLICATE_THRESHOLD = 0.82  # Cosine; empirisch bestimmt (Audit 2026-08-29):
+# echte Near-Dupes >=0.82, thematisch verschiedene Einträge <=0.48. Symmetrischer
+# title+description-Vergleich gegen den Bestand.
+
+
+def _entry_embed_text(path: "Path") -> str:
+    """title + ' ' + description aus einer geschriebenen Vault-.md — wie build_embeddings."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    import vaultlib
+    fm = vaultlib.parse_frontmatter(content)
+    title = vaultlib._extract_title(content, path.stem.replace("-", " "))
+    description = str(fm.get("description", "")).strip()
+    return (title + " " + description).strip()
+
+
+def dedup_written_entries(write_result, vault_path: str, logger) -> None:
+    """Entferne frisch geschriebene Einträge, die Near-Duplikate bestehender sind.
+
+    Mutiert write_result.written in-place: Near-Dupe-Dateien werden von der Platte
+    gelöscht und aus der Liste entfernt, damit Index + Telemetrie sie nicht zählen.
+    Best-effort: jeder Fehler (kein Embed-Server, kein Vektor) => Eintrag behalten.
+    """
+    try:
+        written = list(getattr(write_result, "written", []) or [])
+        if not written:
+            return
+        existing = semantic.load_embeddings(vault_path)
+        if not existing:
+            return  # kein Vergleichsbestand => nichts deduplizieren
+        kept = []
+        for path in written:
+            text = _entry_embed_text(path)
+            if not text:
+                kept.append(path)
+                continue
+            vec = semantic.embed_text(text, prefix="document: ")
+            if not vec:
+                kept.append(path)  # Embed-Server aus => behalten
+                continue
+            neighbors = semantic.semantic_neighbors(
+                vec, existing, top_k=1, min_sim=NEAR_DUPLICATE_THRESHOLD
+            )
+            if neighbors:
+                dup_ref, sim = next(iter(neighbors.items()))
+                try:
+                    path.unlink()
+                except OSError:
+                    kept.append(path)
+                    continue
+                logger.info(
+                    f"Dedup: removed near-duplicate {path.name} "
+                    f"(cosine {sim:.3f} vs existing {dup_ref})"
+                )
+            else:
+                kept.append(path)
+        write_result.written = kept
+    except Exception as e:
+        logger.warning(f"Dedup gate failed (non-fatal, keeping all): {e}")
 
 
 def load_processed_sessions() -> dict:
@@ -294,6 +357,10 @@ def process_session(
     )
     logger.info(f"Written {len(write_result.written)} entries")
 
+    # 3b. DEDUP-GATE: near-duplicate Einträge wieder entfernen (best-effort)
+    dedup_written_entries(write_result, vault_path, logger)
+    logger.info(f"After dedup: {len(write_result.written)} entries kept")
+
     # 4. INDEX
     logger.info("Step 4: Updating indexes...")
     update_indexes(vault_path)
@@ -368,8 +435,33 @@ def find_unprocessed_sessions(since_days: int) -> list[tuple[str, str]]:
     return [(path, sid) for _mtime, path, sid in candidates]
 
 
+def cleanup_stale_injected_dedup(logger, max_age_days: int = 7) -> int:
+    """Lösche ~/.claude/.cha0sbrain-injected-*.json älter als max_age_days.
+
+    prompt_inject.py legt diese per-Session-Dedup-Dateien an und räumt sie nie auf.
+    Best-effort: jeder Fehler wird geschluckt. Gibt die Anzahl gelöschter Dateien zurück.
+    """
+    removed = 0
+    try:
+        cutoff = time.time() - max_age_days * 86400
+        claude_dir = Path.home() / ".claude"
+        for f in claude_dir.glob(".cha0sbrain-injected-*.json"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        if removed:
+            logger.info(f"Cleanup: removed {removed} stale injection-dedup files")
+    except Exception as e:
+        logger.warning(f"Injection-dedup cleanup failed (non-fatal): {e}")
+    return removed
+
+
 def run_backfill(since_days: int, config: dict, logger: logging.Logger) -> int:
     """Process all unprocessed sessions newer than since_days. Returns count written."""
+    cleanup_stale_injected_dedup(logger)
     sessions = find_unprocessed_sessions(since_days)
     processed = load_processed_sessions()
     pending = [(p, sid) for p, sid in sessions if sid not in processed]

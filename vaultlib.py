@@ -26,12 +26,44 @@ _STOPWORDS = {
 
 _WORD_RE = re.compile(r"[a-zA-Z0-9]+")
 
+# Query-seitige Synonym-Expansion (Audit 2026-08-29): das kleine LFM-Embedding
+# trennt viele deutsche Umschreibungen zu schwach (z.B. "telefon" findet den
+# asterisk-Eintrag nicht). Ein kuratiertes DE->Tech-Mapping expandiert die
+# PROMPT-Tokens VOR dem Tag-Matching — rein additiv (fügt Tokens hinzu, ersetzt
+# keine), wirkt also nur auf die Query-Seite (nie auf Entry-Tokens) und kann
+# bestehende Treffer nicht verschlechtern, nur relevante ergänzen. Konservativ
+# gehalten: nur eindeutige Fachbegriff-Umschreibungen, bei Bedarf erweitern.
+_QUERY_SYNONYMS = {
+    "grafikspeicher": ("vram", "gpu"),
+    "videospeicher": ("vram", "gpu"),
+    "grafikkarte": ("gpu",),
+    "sprachmodell": ("llm", "model"),
+    "telefon": ("asterisk", "sip"),
+    "anruf": ("asterisk", "sip", "call"),
+    "anrufe": ("asterisk", "sip", "call"),
+    "leitung": ("sip", "trunk"),
+    "datenbank": ("sqlite", "postgres", "database"),
+    "abfrage": ("query", "sql"),
+    "abfragen": ("query", "sql"),
+}
+
+
+def expand_query_tokens(tokens: set[str]) -> set[str]:
+    """Additiv: ergänzt kuratierte Tech-Synonyme zu Prompt-Tokens. Nur Query-Seite."""
+    out = set(tokens)
+    for tok in tokens:
+        out.update(_QUERY_SYNONYMS.get(tok, ()))
+    return out
+
 # Similarity floor for the semantic layer. Must match the default min_sim of
 # semantic.semantic_neighbors — a neighbor at exactly this similarity gets a
 # semantic_bonus of min_score (just clears the threshold); above it, more.
 # Auf LFM2.5-Embedding kalibriert (2026-07-30): dessen relevante Cosine-Werte
-# liegen ~0.50, irrelevante ~0.41 (Eval eval/embed-ab/RESULTS.md) — Floor 0.42.
-SEMANTIC_FLOOR_SIM = 0.42
+# liegen ~0.50, irrelevante ~0.41 (Eval eval/embed-ab/RESULTS.md).
+# 2026-08-29 (Audit): 0.42 -> 0.40 gesenkt. Empirisch (35 Paraphrase-Tests) holt
+# 0.40 echte Umschreibungen wie "grafikspeicher voll" (sim 0.411) rein, während
+# jeder Nonsens-Prompt weiter 0 Treffer liefert (irrelevante Doc-Sims <=0.35).
+SEMANTIC_FLOOR_SIM = 0.40
 
 
 def tokenize(text: str) -> set[str]:
@@ -178,6 +210,7 @@ def select_entries(
     tokens = tokenize(prompt)
     if not tokens:
         return []
+    tokens = expand_query_tokens(tokens)  # Query-seitige Synonym-Expansion (additiv)
     tag_index = load_tag_index(vault_path)
     tagword_map = build_tagword_map(tag_index)
 

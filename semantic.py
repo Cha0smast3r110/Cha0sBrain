@@ -77,7 +77,7 @@ def cosine(a, b) -> float:
         return 0.0
 
 
-def semantic_neighbors(query_vec, embeddings: dict, *, top_k: int = 6, min_sim: float = 0.42) -> dict:
+def semantic_neighbors(query_vec, embeddings: dict, *, top_k: int = 6, min_sim: float = 0.40) -> dict:
     """ref -> similarity for the top_k entries above min_sim. {} if no query_vec."""
     if not query_vec or not embeddings:
         return {}

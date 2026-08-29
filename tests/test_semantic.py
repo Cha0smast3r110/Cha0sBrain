@@ -58,5 +58,6 @@ def test_select_entries_adds_pure_semantic_candidate(tmp_path: Path, monkeypatch
 
     out = vaultlib.select_entries(str(tmp_path), "andere worte ohne overlap", "", limit=3)
     assert [entry["ref"] for entry in out] == ["ai-ml/semantic-only"]
-    # Neighbor at sim=1.0: semantic_bonus = min_score + 8.0*(1.0 - 0.42) = 7.64.
-    assert out[0]["score"] == pytest.approx(7.64)
+    # Neighbor at sim=1.0: semantic_bonus = min_score + 8.0*(1.0 - SEMANTIC_FLOOR_SIM).
+    # Floor seit Audit 2026-08-29 auf 0.40 gesenkt: 3.0 + 8.0*(1.0 - 0.40) = 7.80.
+    assert out[0]["score"] == pytest.approx(7.80)

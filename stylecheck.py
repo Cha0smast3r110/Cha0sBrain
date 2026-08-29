@@ -20,17 +20,21 @@ VALID_ENTRY_TYPES = {"anleitung", "troubleshooting", "recherche"}
 REQUIRED_SECTIONS: dict[str, list[str]] = {
     # Section-Namen als lowercase-Substrings. Matching ist case-insensitive,
     # Umlaute werden auf o/a/u normalisiert. Reihenfolge egal.
+    # Audit 2026-08-29: "zweites beispiel" + "glossar" von Pflicht -> optional
+    # entfernt (waren die grössten Füllstoff-Treiber je 200+ Zeichen Wiederholung).
+    # Sie dürfen weiter erscheinen, sind aber kein Quarantäne-Grund mehr. Der Kern
+    # (Problem/Hintergrund/Lösung/Cheatsheet) bleibt Pflicht.
     "anleitung": [
         "worum geht", "problemstellung", "hintergrundwissen",
-        "losung", "zweites beispiel", "cheatsheet", "glossar",
+        "losung", "cheatsheet",
     ],
     "troubleshooting": [
         "tl;dr", "symptome", "kontext", "schritt-fur-schritt",
-        "zweites beispiel", "falls es nicht klappt", "glossar",
+        "falls es nicht klappt",
     ],
     "recherche": [
         "worum geht", "fragestellung", "kontext",
-        "recherche-ergebnisse", "fazit", "offene fragen", "glossar",
+        "recherche-ergebnisse", "fazit", "offene fragen",
     ],
 }
 

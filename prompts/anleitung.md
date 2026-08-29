@@ -6,7 +6,7 @@ Deine Ausgabe beginnt DIREKT mit `# {title}`. KEIN einleitender Satz. KEINE Anre
 
 ## Zielgruppe
 
-Der Leser ist **Hobby-Programmierer oder Junior-Developer**. Gehe NICHT davon aus, dass er Senior-Level-Wissen hat. Schreibe so, dass jemand mit Grundkenntnissen das Thema beim ersten Durchlesen versteht. Lieber einen Satz mehr erklaeren als einen zu wenig.
+Der Leser ist **Hobby-Programmierer oder Junior-Developer**. Gehe NICHT davon aus, dass er Senior-Level-Wissen hat. Schreibe so, dass jemand mit Grundkenntnissen das Thema beim ersten Durchlesen versteht. **So knapp wie möglich, so ausführlich wie nötig** — Kern-Learning zuerst, keine Wiederholungen, kein Füllstoff um der Länge willen.
 
 ## Verallgemeinerung (WICHTIG)
 
@@ -45,9 +45,9 @@ Was genau war die Aufgabe oder das Problem? Beschreibe Symptome, Fehlermeldungen
 ## Hintergrundwissen
 **Pflicht. Mindestens MIN_SECTION_LEN Zeichen Fliesstext.**
 
-**Beginne diese Sektion IMMER mit einer Alltags-Analogie** (Restaurant, Post, Auto, Werkzeugkasten, Bibliothek, Kueche, ...). Zwei Saetze reichen. *Beispiel: "Ein JWT-Token ist wie ein Kinoticket: Das Kino prueft nur den Stempel, nicht ob du in einer Mitglieder-Datenbank stehst."*
+Wo es das Verständnis wirklich erleichtert, darfst du mit **einer kurzen** Alltags-Analogie beginnen (ein Satz, kein Muss). *Beispiel: "Ein JWT-Token ist wie ein Kinoticket: geprüft wird nur der Stempel, nicht ob du in einer Datenbank stehst."*
 
-Danach die technische Erklaerung — so, als wuerdest du es dir selbst in 6 Monaten erklaeren. Jeder Fachbegriff beim ersten Auftreten inline erklaert.
+Dann die technische Erklaerung — so, als wuerdest du es dir selbst in 6 Monaten erklaeren. Jeder Fachbegriff beim ersten Auftreten inline erklaert. Halte es fokussiert.
 
 ## Diagnose-Weg / Vorgehensweise
 Schritt-fuer-Schritt wie das Problem analysiert oder die Aufgabe angegangen wurde. Jeder Schritt mit **Begruendung warum**.
@@ -69,13 +69,12 @@ Schritt-fuer-Schritt wie das Problem analysiert oder die Aufgabe angegangen wurd
 Welche Alternativen gab es? Warum wurde diese gewaehlt?
 
 ## Zweites Beispiel: Gleiches Prinzip in einfach
-**Pflicht. Mindestens MIN_SECTION_LEN Zeichen Fliesstext oder Code.**
+**Optional — nur wenn ein zweites Szenario das Prinzip wirklich klarer macht. Wenn es nur Wiederholung wäre: ganz weglassen (keine leere Section).**
 
-**Wichtig:** Zeige das gleiche Konzept an einem anderen, einfacheren Fall. Nimm bewusst ein Alltags- oder Mini-Szenario das mit dem eigentlichen Problem **nichts zu tun hat**, aber das gleiche Pattern zeigt. Ziel: Der Leser erkennt, dass das Prinzip uebertragbar ist.
+Wenn sinnvoll: Zeige das gleiche Konzept an einem einfacheren Fall, der das gleiche Pattern zeigt.
 
 ```python
 # Minimales Beispiel - laeuft standalone, keine Projekt-Abhaengigkeiten
-# Zeigt das gleiche Pattern wie oben, aber in 5-10 Zeilen
 ```
 
 ## Cheatsheet
@@ -90,19 +89,16 @@ Welche Alternativen gab es? Warum wurde diese gewaehlt?
 - [[Konzept-2]] — kurze Erklaerung warum relevant
 
 ## Glossar
-**Pflicht. Mindestens MIN_SECTION_LEN Zeichen — mindestens 2 Eintraege mit je einem vollstaendigen erklaerenden Satz.**
+**Optional — nur für Fachbegriffe, die nicht schon inline erklärt sind. Wenn die inline-Erklärungen reichen: weglassen.**
 
 | Begriff | Erklaerung (einfach, 1 Satz) |
 |---------|------------------------------|
 | Term 1 | Was es bedeutet, ohne weitere Fachbegriffe |
-| Term 2 | Was es bedeutet, ohne weitere Fachbegriffe |
-
-**Tipp:** Nimm ins Glossar auch Begriffe auf, die du "selbstverstaendlich" findest. Der Leser vielleicht nicht.
 
 ## Regeln
 - Sei konkret, nicht vage. "Fuege Error-Handling hinzu" ist schlecht. Zeige den exakten Code.
 - Jeder Code-Block braucht Kommentare die erklaeren WARUM, nicht nur WAS.
 - Das Cheatsheet soll Copy-Paste-faehig sein.
 - Verwandte Konzepte als [[Wiki-Links]] im PascalCase Format.
-- Wenn ein zweites Beispiel moeglich ist, baue es ein — es hilft dem Leser mehr als eine dritte Sektion Theorie.
-- Alle oben gelisteten Sections sind Pflicht. Falls ein Aspekt im Session-Kontext fehlt, schreibe trotzdem die Section mit dem allgemeinen Prinzip oder erklaere kurz die Limitierung. Leere Sections sind verboten — eine leere Section fuehrt zu Quarantaene und der Eintrag landet nicht im Vault.
+- **Kern-Sections sind Pflicht** (Worum geht's, Problemstellung, Hintergrundwissen, Lösung, Cheatsheet) und dürfen nicht leer sein — eine leere Pflicht-Section führt zu Quarantäne. Falls ein Aspekt im Kontext fehlt, schreibe das allgemeine Prinzip.
+- **"Zweites Beispiel" und "Glossar" sind optional** — nur einbauen, wenn sie echten Mehrwert bringen. Im Zweifel weglassen statt mit Füllstoff strecken. Kürzer und fokussierter ist besser.

@@ -6,7 +6,7 @@ Deine Ausgabe beginnt DIREKT mit `# {title}`. KEIN einleitender Satz. KEINE Anre
 
 ## Zielgruppe (WICHTIG)
 
-Der Leser ist **Hobby-Programmierer oder Junior-Developer**. Gehe NICHT davon aus, dass er Senior-Level-Wissen hat. Schreibe so, dass jemand mit Grundkenntnissen den Fix umsetzen kann, ohne nochmal googeln zu müssen. Lieber einen Satz mehr erklären als einen zu wenig.
+Der Leser ist **Hobby-Programmierer oder Junior-Developer**. Gehe NICHT davon aus, dass er Senior-Level-Wissen hat. Schreibe so, dass jemand mit Grundkenntnissen den Fix umsetzen kann, ohne nochmal googeln zu müssen. **So knapp wie möglich, so ausführlich wie nötig** — Fix zuerst, kein Füllstoff.
 
 ## Sprach-Regeln
 
@@ -45,9 +45,9 @@ Ein Satz: Was war das Problem und was war die Lösung.
 ## Kontext & Theorie
 **Pflicht. Mindestens MIN_SECTION_LEN Zeichen Fließtext.**
 
-**Beginne IMMER mit einer Alltags-Analogie** (zwei Sätze reichen). *Beispiel: "Ein Port im Zustand TIME_WAIT ist wie ein frisch verlassener Parkplatz mit Halteverbot: Der Vorgänger ist weg, aber man darf trotzdem 5 Minuten nicht drauf parken — Sicherheitsabstand für verspätete Autos."*
+Wo es wirklich hilft, darfst du mit **einer kurzen** Alltags-Analogie beginnen (ein Satz, kein Muss). *Beispiel: "Ein Port im Zustand TIME_WAIT ist wie ein frisch verlassener Parkplatz mit Halteverbot."*
 
-Danach die technische Erklärung. Was muss der Leser wissen um das Problem zu verstehen? Jeder Fachbegriff beim ersten Auftreten inline erklärt. Halte es kurz aber vollständig.
+Dann die technische Erklärung: Was muss der Leser wissen, um das Problem zu verstehen? Jeder Fachbegriff beim ersten Auftreten inline erklärt. Kurz und fokussiert.
 
 ## Schritt-für-Schritt Lösung
 **Pflicht. Mindestens MIN_SECTION_LEN Zeichen Fließtext oder Code zusammen über alle Unterschritte.**
@@ -76,15 +76,12 @@ konkreter test-befehl
 **Erwartetes Ergebnis:** Was man sehen sollte wenn der Fix funktioniert.
 
 ## Zweites Beispiel: Gleicher Fehler in einem anderen Kontext
-**Pflicht. Mindestens MIN_SECTION_LEN Zeichen Fließtext oder Code.**
+**Optional — nur wenn ein zweites Szenario das Fehler-Pattern wirklich klarer macht. Sonst ganz weglassen (keine leere Section).**
 
-**Wichtig:** Zeige das gleiche Problem-Pattern an einem anderen, einfacheren Fall. Nimm bewusst ein Mini-Szenario oder ein Alltags-Beispiel das mit dem eigentlichen Problem **nichts zu tun hat**, aber den gleichen Fehler zeigt. Ziel: Der Leser erkennt das Pattern wieder, wenn es ihm in einem ganz anderen Projekt begegnet.
-
-*Beispiel: Wenn das Haupt-Thema "Systemd Restart-Loop durch TCP TIME_WAIT" ist, zeige hier ein Mini-Python-Skript das `socket.bind()` auf Port 8000 in einer while-True-Schleife macht und nach SIGINT den gleichen Fehler bekommt — und wie `SO_REUSEADDR` oder `sleep(10)` hilft.*
+Wenn sinnvoll: Zeige das gleiche Fehler-Pattern an einem einfacheren Fall, den der Leser in einem anderen Projekt wiedererkennt.
 
 ```python
 # Minimales Beispiel zum selber ausprobieren - keine Projekt-Abhängigkeiten
-# Reproduziert den Fehler in 10 Zeilen, zeigt dann den Fix
 ```
 
 ## Entscheidungsbaum
@@ -106,14 +103,11 @@ Problem X tritt auf?
 - **Wann man Hilfe holen sollte:** Bei welchen Anzeichen ist das Problem größer als gedacht
 
 ## Glossar
-**Pflicht. Mindestens MIN_SECTION_LEN Zeichen — mindestens 2 Einträge mit je einem vollständigen erklärenden Satz.**
+**Optional — nur für Fachbegriffe, die nicht schon inline erklärt sind. Wenn die inline-Erklärungen reichen: weglassen.**
 
 | Begriff | Erklärung (einfach, 1 Satz) |
 |---------|------------------------------|
 | Term 1 | Was es bedeutet, ohne weitere Fachbegriffe |
-| Term 2 | Was es bedeutet, ohne weitere Fachbegriffe |
-
-**Tipp:** Nimm ins Glossar auch Begriffe auf, die du "selbstverständlich" findest. Der Leser vielleicht nicht.
 
 ## Verwandt
 - [[Konzept-1]] | [[Konzept-2]] | [[Konzept-3]]
@@ -123,6 +117,6 @@ Problem X tritt auf?
 - Jeder Schritt muss einen konkreten Befehl oder Code-Block enthalten.
 - Der Entscheidungsbaum muss auf das spezifische Problem zugeschnitten sein, nicht generisch.
 - "Falls es nicht klappt" ist Pflicht — der Leser braucht einen Plan B.
-- Wenn ein zweites Beispiel möglich ist, baue es ein — es hilft mehr als eine dritte Theorie-Sektion.
 - Verwandte Konzepte als [[Wiki-Links]] im PascalCase Format.
-- Alle oben gelisteten Sections sind Pflicht. Falls ein Aspekt im Session-Kontext fehlt, schreibe trotzdem die Section mit dem allgemeinen Prinzip oder erklaere kurz die Limitierung. Leere Sections sind verboten — eine leere Section fuehrt zu Quarantaene und der Eintrag landet nicht im Vault.
+- **Kern-Sections sind Pflicht** (TL;DR, Symptome, Kontext, Schritt-für-Schritt, Falls es nicht klappt) und dürfen nicht leer sein — leer führt zu Quarantäne. Falls ein Aspekt fehlt, schreibe das allgemeine Prinzip.
+- **"Zweites Beispiel" und "Glossar" sind optional** — nur bei echtem Mehrwert. Im Zweifel weglassen statt mit Füllstoff strecken; kürzer und fokussierter ist besser.

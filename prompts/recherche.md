@@ -70,7 +70,7 @@ Was ist noch unklar oder muss spaeter geklaert werden? Konkrete naechste Schritt
 - [[Konzept-1]] — kurze Erklaerung warum relevant
 
 ## Glossar
-**Pflicht. Mindestens MIN_SECTION_LEN Zeichen — mindestens 2 Eintraege mit je einem vollstaendigen erklaerenden Satz.**
+**Optional — nur für Fachbegriffe, die nicht schon inline erklärt sind. Wenn die inline-Erklärungen reichen: weglassen.**
 
 | Begriff | Erklaerung (einfach, 1 Satz) |
 |---------|------------------------------|
@@ -81,4 +81,5 @@ Was ist noch unklar oder muss spaeter geklaert werden? Konkrete naechste Schritt
 - Vergleichstabellen sind Pflicht wenn mehr als eine Option untersucht wurde.
 - Offene Fragen sind Pflicht — selten ist eine Recherche vollstaendig abgeschlossen.
 - Verwandte Konzepte als [[Wiki-Links]] im PascalCase Format.
-- Alle oben gelisteten Sections sind Pflicht. Falls ein Aspekt im Session-Kontext fehlt, schreibe trotzdem die Section mit dem allgemeinen Prinzip oder erklaere kurz die Limitierung. Leere Sections sind verboten — eine leere Section fuehrt zu Quarantaene und der Eintrag landet nicht im Vault.
+- **Kern-Sections sind Pflicht** (Worum geht's, Fragestellung, Kontext, Recherche-Ergebnisse, Fazit, Offene Fragen) und dürfen nicht leer sein — leer führt zu Quarantäne. Falls ein Aspekt fehlt, schreibe das allgemeine Prinzip.
+- **Das "Glossar" ist optional** — nur bei echtem Mehrwert. Im Zweifel weglassen statt mit Füllstoff strecken.

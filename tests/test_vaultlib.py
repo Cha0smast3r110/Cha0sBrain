@@ -128,3 +128,20 @@ def test_select_entries_respects_exclude(tmp_path: Path):
         str(tmp_path), "ollama tool parsing", "example-agent",
         min_score=3.0, exclude_refs={"devtools/ollama-client"})
     assert all(e["ref"] != "devtools/ollama-client" for e in out)
+
+
+def test_load_config_returns_default_vault_path_when_config_missing(tmp_path):
+    out = vaultlib.load_config(tmp_path / "no-config.json")
+    assert out == vaultlib.DEFAULT_VAULT_PATH
+
+
+def test_load_config_reads_vault_path_from_json(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"vault_path": "/some/other/vault"}), encoding="utf-8")
+    assert vaultlib.load_config(cfg) == "/some/other/vault"
+
+
+def test_load_config_falls_back_on_malformed_json(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text("NOT JSON", encoding="utf-8")
+    assert vaultlib.load_config(cfg) == vaultlib.DEFAULT_VAULT_PATH

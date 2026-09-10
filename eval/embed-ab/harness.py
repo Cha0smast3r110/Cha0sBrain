@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-import inject  # noqa: E402
+import vaultlib  # noqa: E402
 from build_embeddings import iter_entry_texts  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
@@ -106,7 +106,7 @@ def cosine(a, b) -> float:
 
 def load_corpus():
     """[(ref, text), ...] — exakt wie build_embeddings sie einbettet."""
-    vault = inject.load_config()
+    vault = vaultlib.load_config()
     return list(iter_entry_texts(vault))
 
 

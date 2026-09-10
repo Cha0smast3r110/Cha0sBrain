@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from statistics import mean
 
-import inject
 import vaultlib
 
 
@@ -37,7 +36,7 @@ def shorten(text: str, limit: int = 80) -> str:
 
 def main() -> int:
     """Print retrieval results for all test prompts."""
-    vault_path = inject.load_config()
+    vault_path = vaultlib.load_config()
     prompts_with_hits = 0
     scores: list[float] = []
 

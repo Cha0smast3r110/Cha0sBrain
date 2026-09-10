@@ -7,9 +7,8 @@ import json
 import time
 from pathlib import Path
 
-import inject
-import semantic
 import vaultlib
+import semantic
 
 
 def iter_entry_texts(vault_path: str):
@@ -35,7 +34,7 @@ def iter_entry_texts(vault_path: str):
 def main() -> int:
     """Incrementally embed vault entries and write _embeddings.json."""
     started = time.monotonic()
-    vault_path = inject.load_config()
+    vault_path = vaultlib.load_config()
     vault = Path(vault_path)
     embed_path = vault / semantic.EMBED_FILE
     embeddings = semantic.load_embeddings(vault_path)

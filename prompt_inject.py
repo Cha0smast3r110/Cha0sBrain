@@ -13,7 +13,7 @@ import os
 import sys
 from pathlib import Path
 
-import inject  # reuse load_config (vault path resolution)
+
 import vaultlib
 
 MIN_SCORE = 4.0
@@ -22,7 +22,7 @@ HOME_CLAUDE = Path(os.path.expanduser("~/.claude"))
 
 
 def _resolve_vault() -> str:
-    return inject.load_config()
+    return vaultlib.load_config()
 
 
 def dedup_path(session_id: str) -> Path:

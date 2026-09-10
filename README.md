@@ -94,7 +94,7 @@ their own key instead of passing the one shared key around.)*
 > Notes are written for a junior/hobby reading level — inline jargon
 > explanations, everyday analogies, and a second worked example per entry.
 
-A second path handles **recall**: `inject.py` (`SessionStart`) seeds a session,
+A second path handles **recall**: `prompt_inject.py` (`UserPromptSubmit`) injects
 and `prompt_inject.py` (`UserPromptSubmit`) ranks vault entries against each
 prompt — lexical scoring by default, with an **optional semantic layer** on top
 (local `nomic-embed-text` via [Ollama](https://ollama.com)). Without Ollama it
@@ -111,7 +111,6 @@ Modular pipeline — every stage is a pure-ish unit with one job:
 | `analyzer.py` | Sends the session to Haiku, gets back classified topics as JSON, assigns each a wing. |
 | `writer.py` | Generates one Markdown file per topic at `vault/{wing}/{slug}.md`. |
 | `indexer.py` | Builds wing MOCs, a global MOC, the tag index and the wings registry — purely programmatic, no LLM call. |
-| `inject.py` | `SessionStart` hook — renders a context block back into new sessions. |
 | `prompt_inject.py` | `UserPromptSubmit` hook — injects the most prompt-relevant past lessons. |
 | `vaultlib.py` | Frontmatter parser, tag index, DE/EN tokenizer, relevance scoring/ranking. |
 | `semantic.py` / `build_embeddings.py` | Optional embedding layer over Ollama `nomic-embed-text`. |
@@ -172,7 +171,7 @@ cloned the repo):
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "timeout": 5,
-        "command": "python3 /path/to/Cha0sBrain/inject.py" } ] }
+        "command": "python3 /path/to/Cha0sBrain/prompt_inject.py" } ] }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "timeout": 5,

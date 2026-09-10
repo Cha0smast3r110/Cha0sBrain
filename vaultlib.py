@@ -1,4 +1,4 @@
-"""Shared vault helpers for the Cha0sBrain hooks (inject.py, prompt_inject.py).
+"""Shared vault helpers for the Cha0sBrain hooks and tools (prompt_inject.py, brain.py).
 
 Pure stdlib. Fast, side-effect-free functions for tokenizing prompts and
 scoring vault entries for relevance. NEVER raises on bad input where a hook
@@ -7,7 +7,13 @@ would call it — callers still wrap in try/except per the never-block rule.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+from pathlib import Path
+
+CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+DEFAULT_VAULT_PATH = os.path.expanduser("~/cha0sbrain-vault")
 
 # Minimal high-frequency stopwords, German + English. Kept small on purpose:
 # the goal is to drop noise words, not to do real NLP.
@@ -46,6 +52,27 @@ _QUERY_SYNONYMS = {
     "abfrage": ("query", "sql"),
     "abfragen": ("query", "sql"),
 }
+
+
+def load_config(path: Path | None = None) -> str:
+    """Return the vault_path from config.json, falling back to the default
+    when the file is missing or malformed.
+
+    Lag bis 2026-09-10 in inject.py; der SessionStart-Hook ist mit dem
+    Handoff-Seed entfallen, die Funktion wird aber weiter von
+    build_embeddings.py, audit_retrieval.py und der Eval-Harness gebraucht.
+    """
+    if path is None:
+        path = CONFIG_PATH
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+        vp = data.get("vault_path")
+        if isinstance(vp, str) and vp:
+            return vp
+    except (OSError, json.JSONDecodeError):
+        pass
+    return DEFAULT_VAULT_PATH
 
 
 def expand_query_tokens(tokens: set[str]) -> set[str]:

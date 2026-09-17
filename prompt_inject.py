@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -168,6 +169,17 @@ def main(stdin=None, stdout=None) -> int:
             withheld = set(meta.get("withheld") or [])
             matched = {e["ref"] for e in entries}
             meta["matched_any"] = True
+            # Welcher Prompt der erste mit Treffer war. Nur dieser eine ist die
+            # Auswertungseinheit; spaetere sind durch die vorherige Injektion
+            # kontaminiert. In der Behandlungsgruppe stuende das auch im
+            # Transkript (der injizierte Block ist dort sichtbar), in der
+            # Kontrollgruppe aber nicht — dort wird ja nichts geschrieben. Ohne
+            # diese Nummer ist die Einheit in der Kontrollgruppe nicht
+            # auffindbar und der Vergleich damit unmoeglich.
+            if "first_hit_prompt" not in meta:
+                meta["first_hit_prompt"] = meta["prompts"]
+                meta["first_hit_ts"] = datetime.now(timezone.utc).isoformat()
+                meta["first_hit_refs"] = sorted(matched)
             if holdout:
                 meta["withheld"] = sorted(withheld | matched)
 

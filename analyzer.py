@@ -161,6 +161,49 @@ def _load_inference_token_env() -> dict[str, str]:
     return {}
 
 
+# --- Verbrauchszaehler -------------------------------------------------------
+# Was Cha0sBrain selbst kostet, war bisher unsichtbar: die Inferenz laeuft ueber
+# `claude -p --no-session-persistence`, es entsteht also kein Transkript, das der
+# Usage-Ingest von PP9000 einlesen koennte. Der CLI liefert die Zahlen aber frei
+# Haus mit (`--output-format json` -> usage + total_cost_usd); sie wurden nur
+# weggeworfen. Ohne diese Seite kann niemand sagen, ob das System mehr spart als
+# es kostet — und genau das ist die Frage (Maxim, 2026-09-17).
+_USAGE_ACC: dict[str, float] = {}
+
+
+def reset_inference_usage() -> None:
+    """Zaehler auf null — einmal je brain.py-Lauf."""
+    _USAGE_ACC.clear()
+    _USAGE_ACC.update({
+        "calls": 0, "inputTokens": 0, "outputTokens": 0,
+        "cacheReadTokens": 0, "cacheCreationTokens": 0, "costUsd": 0.0, "durationMs": 0,
+    })
+
+
+def get_inference_usage() -> dict[str, float]:
+    """Summierter Verbrauch aller Inferenz-Aufrufe seit dem letzten Reset."""
+    if not _USAGE_ACC:
+        reset_inference_usage()
+    return dict(_USAGE_ACC)
+
+
+def _record_usage(envelope: dict) -> None:
+    """Uebernimmt usage/total_cost_usd aus der CLI-Antwort. Wirft nie."""
+    try:
+        if not _USAGE_ACC:
+            reset_inference_usage()
+        u = envelope.get("usage") or {}
+        _USAGE_ACC["calls"] += 1
+        _USAGE_ACC["inputTokens"] += int(u.get("input_tokens") or 0)
+        _USAGE_ACC["outputTokens"] += int(u.get("output_tokens") or 0)
+        _USAGE_ACC["cacheReadTokens"] += int(u.get("cache_read_input_tokens") or 0)
+        _USAGE_ACC["cacheCreationTokens"] += int(u.get("cache_creation_input_tokens") or 0)
+        _USAGE_ACC["costUsd"] += float(envelope.get("total_cost_usd") or 0.0)
+        _USAGE_ACC["durationMs"] += int(envelope.get("duration_ms") or 0)
+    except (TypeError, ValueError):
+        pass
+
+
 def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: str | None = None) -> str:
     """Call Claude CLI in non-interactive mode and return the response text."""
     import os
@@ -188,8 +231,12 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
         "--tools", "",
     ]
 
+    # Immer die JSON-Huelle anfordern: sie traegt usage und total_cost_usd.
+    # Der eigentliche Text steht darin unter "result", die Aufrufer bekommen
+    # also unveraendert das, was sie vorher bekommen haben.
     if json_schema:
-        cmd.extend(["--json-schema", json_schema, "--output-format", "json"])
+        cmd.extend(["--json-schema", json_schema])
+    cmd.extend(["--output-format", "json"])
 
     # Use temp dir as cwd to avoid loading project CLAUDE.md files
     import tempfile
@@ -220,7 +267,19 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
     if result.returncode != 0:
         logger.error(f"Claude CLI error: {result.stderr[:500]}")
         return ""
-    return result.stdout
+
+    # Huelle auspacken und dabei den Verbrauch mitnehmen. Schlaegt das fehl,
+    # wird die Rohausgabe zurueckgegeben — dann fehlt nur die Kostenzahl, die
+    # Pipeline laeuft weiter.
+    try:
+        envelope = json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return result.stdout
+    if not isinstance(envelope, dict) or "result" not in envelope:
+        return result.stdout
+    _record_usage(envelope)
+    text = envelope.get("result")
+    return text if isinstance(text, str) else result.stdout
 
 
 MAX_PROMPT_CHARS = 150000  # Cap total prompt size for reliable Haiku responses

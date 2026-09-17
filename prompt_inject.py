@@ -8,6 +8,7 @@ exit 0.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -19,6 +20,74 @@ import vaultlib
 MIN_SCORE = 4.0
 LIMIT = 3
 HOME_CLAUDE = Path(os.path.expanduser("~/.claude"))
+
+# --- Kontrollgruppe ----------------------------------------------------------
+# Ohne Gegenprobe ist jede Ersparnis-Zahl geraten: man sieht nur Sitzungen MIT
+# Injektion und hat nichts, wogegen man sie haelt. Deshalb bekommt ein fester
+# Anteil der Sitzungen bewusst KEINE Lektionen — obwohl passende da waeren.
+# Die zurueckgehaltenen Treffer werden mitgeschrieben, damit spaeter Gleiches
+# mit Gleichem verglichen wird ("Lektion war verfuegbar") statt Sitzungen mit
+# Treffern gegen Sitzungen ohne Treffer.
+#
+# Die Zuordnung ist deterministisch ueber die Session-Id: eine Sitzung ist
+# entweder ganz drin oder ganz draussen, nie halb — sonst verwaessert eine
+# spaete Injektion den Vergleich fuer die ganze Sitzung.
+HOLDOUT_SALT = "cha0sbrain-injection-holdout-v1"
+# Standard: AUS. Die Gegenprobe kostet in jeder betroffenen Sitzung echte Hilfe
+# — sie wird nur eingeschaltet, wenn jemand die Messung wirklich will
+# (config.json: "injection_holdout_rate", oder CHA0SBRAIN_HOLDOUT_RATE).
+DEFAULT_HOLDOUT_RATE = 0.0
+
+
+def holdout_rate() -> float:
+    """Anteil der Sitzungen ohne Injektion (0 = Gegenprobe aus)."""
+    try:
+        raw = os.environ.get("CHA0SBRAIN_HOLDOUT_RATE")
+        if raw is not None:
+            return max(0.0, min(1.0, float(raw)))
+        cfg_path = Path(__file__).resolve().parent / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return max(0.0, min(1.0, float(cfg.get("injection_holdout_rate", DEFAULT_HOLDOUT_RATE))))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return DEFAULT_HOLDOUT_RATE
+
+
+def is_holdout(session_id: str, rate: float | None = None) -> bool:
+    """Gehoert diese Sitzung zur Kontrollgruppe? Stabil ueber alle Prompts."""
+    r = holdout_rate() if rate is None else rate
+    if r <= 0:
+        return False
+    if r >= 1:
+        return True
+    digest = hashlib.sha256((HOLDOUT_SALT + (session_id or "nosession")).encode("utf-8")).digest()
+    bucket = int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
+    return bucket < r
+
+
+def meta_path(session_id: str) -> Path:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+    return HOME_CLAUDE / f".cha0sbrain-inject-meta-{safe}.json"
+
+
+def load_meta(session_id: str) -> dict:
+    try:
+        d = json.loads(meta_path(session_id).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_meta(session_id: str, meta: dict) -> None:
+    """Begleitdatei zur Dedup-Liste: Kontrollgruppe, Umfang, Treffer.
+
+    Getrennte Datei, damit das bestehende Format der Dedup-Liste (reines
+    Array) unveraendert bleibt und aeltere Leser nicht stolpern.
+    """
+    try:
+        HOME_CLAUDE.mkdir(parents=True, exist_ok=True)
+        meta_path(session_id).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _resolve_vault() -> str:
@@ -88,9 +157,30 @@ def main(stdin=None, stdout=None) -> int:
             _resolve_vault(), prompt, current_project,
             min_score=MIN_SCORE, limit=LIMIT, exclude_refs=seen,
         )
+
+        holdout = is_holdout(session_id)
+        meta = load_meta(session_id)
+        meta["holdout"] = holdout
+        meta["prompts"] = int(meta.get("prompts", 0)) + 1
+        if entries:
+            # Auch in der Kontrollgruppe festhalten, dass es Treffer GAB —
+            # sonst laesst sich spaeter nicht Gleiches mit Gleichem vergleichen.
+            withheld = set(meta.get("withheld") or [])
+            matched = {e["ref"] for e in entries}
+            meta["matched_any"] = True
+            if holdout:
+                meta["withheld"] = sorted(withheld | matched)
+
+        if holdout:
+            save_meta(session_id, meta)
+            _emit(stdout, "")
+            return 0
+
         ctx = render_bullets(entries)
         if entries:
             save_seen(session_id, seen | {e["ref"] for e in entries})
+            meta["injected_chars"] = int(meta.get("injected_chars", 0)) + len(ctx)
+        save_meta(session_id, meta)
         _emit(stdout, ctx)
         return 0
     except Exception:

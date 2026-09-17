@@ -40,6 +40,36 @@ def detect_injected_entries(session_id: str) -> list[str]:
         return []
 
 
+def detect_injection_holdout(session_id: str) -> bool | None:
+    """War diese Sitzung in der Kontrollgruppe (bewusst ohne Injektion)?
+
+    None = keine Begleitdatei vorhanden (Sitzung lief vor der Einfuehrung der
+    Gegenprobe, oder der Hook lief nicht). Bewusst nicht False: "wir wissen es
+    nicht" und "war in der Behandlungsgruppe" duerfen nicht dasselbe bedeuten,
+    sonst waescht sich die Kontrollgruppe still voll.
+    """
+    try:
+        safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+        path = HOME_CLAUDE / f".cha0sbrain-inject-meta-{safe}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or "holdout" not in data:
+            return None
+        return bool(data["holdout"])
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def detect_injection_meta(session_id: str) -> dict:
+    """Begleitdaten der Injektion: Umfang, Treffer, Kontrollgruppe."""
+    try:
+        safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+        path = HOME_CLAUDE / f".cha0sbrain-inject-meta-{safe}.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+
+
 def _learning_stem(file_path: str) -> str | None:
     """Return the slug of a learning file the path points at, or None.
 
@@ -124,6 +154,9 @@ def build_record(
     learnings_consumed: list[str],
     learnings_injected: list[str] | None = None,
     refusals: list[dict] | None = None,
+    inference_usage: dict | None = None,
+    injection_holdout: bool | None = None,
+    injection_meta: dict | None = None,
     emitted_at: str | None = None,
 ) -> dict:
     """Build a telemetry record conforming to docs/contracts/telemetry.md."""
@@ -148,6 +181,24 @@ def build_record(
         "learnings_consumed_hints": list(learnings_consumed),
         "learnings_injected": list(learnings_injected or []),
         "refusals": list(refusals or []),
+        # Was dieser Lauf an Inferenz gekostet hat (Analyzer + Writer zusammen).
+        # Ohne diese Zahl laesst sich nicht sagen, ob das System mehr spart als
+        # es verbraucht — die Aufrufe laufen ohne Transkript und tauchen sonst
+        # in keiner Kostenerfassung auf.
+        "inference_usage": dict(inference_usage or {}),
+        # Kontrollgruppe: True = in dieser Sitzung wurde bewusst NICHT injiziert,
+        # obwohl es passende Lektionen gab. Erst der Vergleich gegen diese
+        # Gruppe macht aus einer Schaetzung eine Messung.
+        "injection_holdout": bool(injection_holdout) if injection_holdout is not None else None,
+        # Umfang der Injektion (Zeichen) und ob es ueberhaupt Treffer gab —
+        # letzteres ist die Bedingung dafuer, dass eine Sitzung in den Vergleich
+        # gehoert, egal auf welcher Seite sie steht.
+        "injection_meta": {
+            "prompts": int((injection_meta or {}).get("prompts", 0)),
+            "injected_chars": int((injection_meta or {}).get("injected_chars", 0)),
+            "matched_any": bool((injection_meta or {}).get("matched_any", False)),
+            "withheld": list((injection_meta or {}).get("withheld", [])),
+        },
     }
 
 

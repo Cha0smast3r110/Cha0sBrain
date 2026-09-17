@@ -49,6 +49,11 @@ def test_build_record_contains_all_contract_fields():
         "learnings_consumed_hints",
         "learnings_injected",
         "refusals",
+        # 2026-09-17: Kosten- und Kontrollgruppen-Felder. Ohne sie laesst sich
+        # nicht sagen, ob das System mehr spart als es verbraucht.
+        "inference_usage",
+        "injection_holdout",
+        "injection_meta",
     }
 
 

@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from collector import parse_session, collect_git_changes, derive_project_id
+import analyzer
 from analyzer import analyze_session
 from writer import write_entries
 from indexer import update_indexes
@@ -285,6 +286,8 @@ def process_session(
     vault_path = config.get("vault_path", str(BRAIN_DIR / "vault"))
 
     # 1. COLLECT
+    # Verbrauchszaehler je Lauf zuruecksetzen (Analyzer + Writer summieren sich).
+    analyzer.reset_inference_usage()
     logger.info("Step 1: Collecting session data...")
     if session_file is None:
         session_file = find_session_file(session_id, cwd)
@@ -369,6 +372,9 @@ def process_session(
     try:
         learnings = telemetry.detect_learnings_consumed(session_data["tool_calls"])
         injected = telemetry.detect_injected_entries(session_id)
+        usage = analyzer.get_inference_usage()
+        holdout = telemetry.detect_injection_holdout(session_id)
+        inject_meta = telemetry.detect_injection_meta(session_id)
         record = telemetry.build_record(
             session_id=session_id,
             workstation_name=None,
@@ -381,11 +387,16 @@ def process_session(
             learnings_consumed=learnings,
             learnings_injected=injected,
             refusals=write_result.refusals,
+            inference_usage=usage,
+            injection_holdout=holdout,
+            injection_meta=inject_meta,
         )
         telemetry.append_telemetry(vault_path, record)
         logger.info(f"Telemetry emitted: {len(write_result.written)} written, "
                     f"{write_result.stylecheck_retries} retries, "
-                    f"{len(write_result.quarantined)} quarantined")
+                    f"{len(write_result.quarantined)} quarantined, "
+                    f"Inferenz {usage.get('calls', 0)} Aufrufe / "
+                    f"{usage.get('costUsd', 0.0):.4f} USD")
     except Exception as e:
         logger.warning(f"Telemetry emit failed (non-fatal): {e}")
 

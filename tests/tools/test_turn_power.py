@@ -156,3 +156,29 @@ def test_welch_erkennt_einen_klaren_unterschied():
     assert r["p"] < 0.05
     assert tp.welch_log([20.0] * 60, [10.0] * 60)["relativer_unterschied"] < 0
     assert tp.welch_log([10.0] * 60, [10.0] * 60)["p"] > 0.05
+
+
+def test_marker_am_nachbar_anhang_zaehlt_trotzdem(tmp_path):
+    # Der Hook-Anhang haengt in echten Transkripten oft nicht am Prompt selbst,
+    # sondern an einem anderen Anhang desselben Turns. Ueber die Elternkette
+    # gesucht, fiel so jede zweite Treffer-Sitzung stumm heraus.
+    fremder_anhang = {"type": "attachment", "uuid": "a1", "parentUuid": "u1",
+                      "attachment": {"type": "edited_text_file", "content": ["x"]}}
+    marker = {"type": "attachment", "uuid": "a2", "parentUuid": "a1",
+              "attachment": {"type": "hook_additional_context",
+                             "content": [f"## {tp.MARKER}\n\n- `x/y.md`\n"]}}
+    p = schreibe(tmp_path, [_prompt("u1"), fremder_anhang, marker,
+                            _antwort(out=222, tools=2)])
+    u, hits = tp.einheit_aus_marker(p)
+    assert hits == 1
+    assert u["prompt_nr"] == 1 and u["output_tokens"] == 222
+
+
+def test_marker_wird_dem_prompt_davor_zugeordnet(tmp_path):
+    # Nicht dem naechsten danach: der Hook feuert beim Absenden des Prompts.
+    p = schreibe(tmp_path, [
+        _prompt("u1"), _antwort(out=10),
+        _prompt("u2"), _anhang("u2"), _antwort(out=777),
+    ])
+    u, _ = tp.einheit_aus_marker(p)
+    assert u["prompt_nr"] == 2 and u["output_tokens"] == 777

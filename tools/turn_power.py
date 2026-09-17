@@ -52,15 +52,28 @@ Z_POWER = 0.841621  # 80 %
 
 ZIELGROESSEN = ("api_calls", "tool_calls", "kostenproxy", "output_tokens")
 
+# Primaere Zielgroesse und die Stichproben, die sie laut Bootstrap braucht
+# (80 % Power). Beides gemessen, nicht gesetzt — nachzurechnen mit --streuung.
+PRIMAER = "api_calls"
+MEILENSTEIN_JE_GRUPPE = 144   # 30 % Effekt nachweisbar, rund 4 Wochen
+ZIEL_JE_GRUPPE = 384          # 20 % Effekt nachweisbar, rund 10 Wochen
+
 
 # ---------------------------------------------------------------- Transkripte
 
 def _scan(path: Path):
-    """Zerlegt ein Transkript billig: Prompt-Zeilen und Treffer-Anhaenge.
+    """Zerlegt ein Transkript billig: Prompt-Zeilen und Treffer-Turns.
 
     Zwei Durchgaenge, weil ein Transkript zehntausende Zeilen mit je hunderten
     Kilobyte haben kann: erst per Zeichenkette die Kandidaten finden, dann nur
     die wenigen relevanten Zeilen als JSON lesen.
+
+    Die Zuordnung Marker -> Prompt laeuft ueber die Position, nicht ueber
+    `parentUuid`. Der Anhang haengt naemlich nicht immer am Prompt selbst,
+    sondern haeufig an einem anderen Anhang desselben Turns — ueber die
+    Elternkette gesucht, fallen solche Sitzungen stumm heraus. Der Hook feuert
+    ausschliesslich beim Absenden eines Prompts, also gehoert ein Marker immer
+    zum letzten Prompt davor.
     """
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -80,21 +93,21 @@ def _scan(path: Path):
         except json.JSONDecodeError:
             return {}
 
-    hit_parents = set()
-    for i in marker_idx:
-        d = lade(i)
-        att = d.get("attachment") or {}
-        content = att.get("content")
-        blob = " ".join(content) if isinstance(content, list) else str(content)
-        if MARKER in blob:
-            hit_parents.add(d.get("parentUuid"))
-
     starts = []
     for i in prompt_idx:
         d = lade(i)
         if d.get("type") == "user" and d.get("promptSource"):
             starts.append((i, d))
-    return lines, starts, hit_parents, lade
+
+    # Position des Marker-Turns in `starts` — der letzte Prompt vor dem Anhang.
+    treffer_pos = set()
+    if starts:
+        zeilen_nr = [ln for ln, _ in starts]
+        for m in marker_idx:
+            davor = [k for k, ln in enumerate(zeilen_nr) if ln < m]
+            if davor:
+                treffer_pos.add(davor[-1])
+    return lines, starts, treffer_pos, lade
 
 
 def _messe_turn(lines, lade, von, bis):
@@ -129,12 +142,10 @@ def _messe_turn(lines, lade, von, bis):
 
 def einheit_aus_marker(path: Path):
     """Der erste Turn mit sichtbarem Injektions-Block. Zaehlt auch alle Treffer."""
-    lines, starts, hit_parents, lade = _scan(path)
-    if not starts or not hit_parents:
+    lines, starts, treffer_pos, lade = _scan(path)
+    if not starts or not treffer_pos:
         return None, 0
-    hits = [i for i, d in enumerate(starts) if d[1].get("uuid") in hit_parents]
-    if not hits:
-        return None, 0
+    hits = sorted(treffer_pos)
     pos = hits[0]
     von = starts[pos][0]
     bis = starts[pos + 1][0] if pos + 1 < len(starts) else len(lines)
@@ -153,7 +164,7 @@ def einheit_aus_nummer(path: Path, prompt_nr: int):
     schreibt der Hook nichts ins Transkript, die Nummer aus der Begleitdatei
     ist dort die einzige Spur.
     """
-    lines, starts, hit_parents, lade = _scan(path)
+    lines, starts, treffer_pos, lade = _scan(path)
     if not starts or prompt_nr < 1 or prompt_nr > len(starts):
         return None
     pos = prompt_nr - 1
@@ -164,7 +175,7 @@ def einheit_aus_nummer(path: Path, prompt_nr: int):
         return None
     werte.update(session=path.stem, projekt=path.parent.name,
                  ts=starts[pos][1].get("timestamp"), prompt_nr=prompt_nr,
-                 marker_sichtbar=starts[pos][1].get("uuid") in hit_parents)
+                 marker_sichtbar=pos in treffer_pos)
     return werte
 
 
@@ -317,10 +328,11 @@ def modus_streuung(args):
     return 0
 
 
-def modus_auswerten(args):
-    metas = lade_metas()
-    behandelt, kontrolle, fehlend, inkonsistent = [], [], 0, 0
-    for sid, meta in metas.items():
+def sammle_gruppen():
+    """Einheiten beider Gruppen aus den Begleitdateien einsammeln."""
+    behandelt, kontrolle = [], []
+    fehlend = inkonsistent = 0
+    for sid, meta in lade_metas().items():
         if not meta.get("matched_any") or not meta.get("first_hit_prompt"):
             continue
         p = transkript(sid)
@@ -339,21 +351,52 @@ def modus_auswerten(args):
             inkonsistent += 1
             continue
         (kontrolle if holdout else behandelt).append(u)
+    return behandelt, kontrolle, fehlend, inkonsistent
+
+
+def modus_auswerten(args):
+    behandelt, kontrolle, fehlend, inkonsistent = sammle_gruppen()
+    ergebnis = {
+        "behandlung": len(behandelt),
+        "kontrolle": len(kontrolle),
+        "ohne_transkript": fehlend,
+        "nummer_passt_nicht": inkonsistent,
+        "ziel_je_gruppe": ZIEL_JE_GRUPPE,
+        "meilenstein_je_gruppe": MEILENSTEIN_JE_GRUPPE,
+        "kleinste_gruppe": 0,
+        "primaer": PRIMAER,
+        "auswertbar": min(len(behandelt), len(kontrolle)) >= 30,
+        "vollstaendig": min(len(behandelt), len(kontrolle)) >= ZIEL_JE_GRUPPE,
+        "vergleich": {},
+    }
+    ergebnis["kleinste_gruppe"] = min(len(behandelt), len(kontrolle))
+    ergebnis["meilenstein_erreicht"] = ergebnis["kleinste_gruppe"] >= MEILENSTEIN_JE_GRUPPE
+    if ergebnis["auswertbar"]:
+        for z in ZIELGROESSEN:
+            r = welch_log([u[z] for u in behandelt], [u[z] for u in kontrolle])
+            if r:
+                ergebnis["vergleich"][z] = r
+
+    if args.json:
+        print(json.dumps(ergebnis, ensure_ascii=False, indent=2))
+        return 0
 
     print(f"Begleitdateien mit Treffer : {len(behandelt) + len(kontrolle)}")
     print(f"  Behandlung (injiziert)   : {len(behandelt)}")
     print(f"  Kontrolle (zurueckgeh.)  : {len(kontrolle)}")
     print(f"  ohne Transkript          : {fehlend}")
     print(f"  Nummer passt nicht       : {inkonsistent}")
-    if len(kontrolle) < 30 or len(behandelt) < 30:
+    print(f"  Meilenstein je Gruppe    : {MEILENSTEIN_JE_GRUPPE} (30 % Effekt, {PRIMAER})")
+    print(f"  Ziel je Gruppe           : {ZIEL_JE_GRUPPE} (20 % Effekt, {PRIMAER})")
+    if not ergebnis["auswertbar"]:
         print("\nZu wenig Daten fuer einen Vergleich. Die Kontrollgruppe muss laufen")
         print("(config.json: injection_holdout_rate) und sich erst fuellen.")
         return 0
+    if not ergebnis["vollstaendig"]:
+        print("\nZwischenstand — die Stichprobe ist noch nicht voll. Die Zahlen unten")
+        print("sind ein Blick, keine Aussage.")
     print()
-    for z in ZIELGROESSEN:
-        r = welch_log([u[z] for u in behandelt], [u[z] for u in kontrolle])
-        if not r:
-            continue
+    for z, r in ergebnis["vergleich"].items():
         richtung = "weniger" if r["relativer_unterschied"] > 0 else "mehr"
         print(f"## {z}: {abs(r['relativer_unterschied']):.1%} {richtung} mit Injektion "
               f"(t={r['t']:.2f}, p={r['p']:.4f})"
@@ -367,6 +410,7 @@ def main():
     ap.add_argument("--auswerten", action="store_true", help="Gruppenvergleich statt Streuung")
     ap.add_argument("--tage", type=int, default=30, help="Zeitfenster fuer die Zulaufrate")
     ap.add_argument("--laeufe", type=int, default=1500, help="Bootstrap-Wiederholungen")
+    ap.add_argument("--json", action="store_true", help="maschinenlesbar (nur --auswerten)")
     args = ap.parse_args()
     return modus_auswerten(args) if args.auswerten else modus_streuung(args)
 

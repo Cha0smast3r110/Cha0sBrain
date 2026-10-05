@@ -99,6 +99,16 @@ def _positive_refs(lines: list[str], start_line: int, end_line: int, vault_path:
     return found
 
 
+def _infer_cwd(meta: dict, transcript: Path) -> str:
+    cwd = meta.get("cwd") or meta.get("cwd_base")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    encoded = transcript.parent.name
+    if encoded.startswith("-") and "-" in encoded[1:]:
+        return encoded.rsplit("-", 1)[-1]
+    return encoded
+
+
 def _case_for(session_id: str, meta: dict, transcript: Path, vault_path: Path) -> dict | None:
     try:
         prompt_nr = int(meta.get("first_hit_prompt"))
@@ -114,7 +124,7 @@ def _case_for(session_id: str, meta: dict, transcript: Path, vault_path: Path) -
     return {
         "session_id": session_id,
         "prompt": prompt,
-        "cwd": meta.get("cwd") or "",
+        "cwd": _infer_cwd(meta, transcript),
         "label": "interactive",  # filled after duplicate-prefix pass
         "positive_refs": _positive_refs(lines, start_line, end_line, vault_path),
     }

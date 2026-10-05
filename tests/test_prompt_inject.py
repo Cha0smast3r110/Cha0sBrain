@@ -34,6 +34,7 @@ def test_matching_prompt_injects_bullets(tmp_path, monkeypatch):
     ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
     assert "ollama-client" in ctx
     assert "Relevante Vault-Lessons" in ctx
+    assert prompt_inject.load_meta("s2")["cwd_base"] == "example-agent"
 
 
 def test_dedup_suppresses_second_injection(tmp_path, monkeypatch):

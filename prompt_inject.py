@@ -224,6 +224,7 @@ def main(stdin=None, stdout=None) -> int:
 
         holdout = is_holdout(session_id)
         meta = load_meta(session_id)
+        meta["cwd_base"] = current_project
         meta["holdout"] = holdout
         meta["prompts"] = int(meta.get("prompts", 0)) + 1
         if entries:

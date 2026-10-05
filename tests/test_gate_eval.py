@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval" / "gate"))
 
+import build_cases  # noqa: E402
 import run_gate_eval  # noqa: E402
 
 
@@ -22,6 +23,14 @@ def _entry(vault: Path, ref: str, description: str) -> None:
         f"# {slug}\n",
         encoding="utf-8",
     )
+
+
+def test_build_cases_infers_cwd_for_old_sidecars(tmp_path):
+    transcript = tmp_path / "-home-user-ExampleApp" / "s1.jsonl"
+    transcript.parent.mkdir()
+    assert build_cases._infer_cwd({}, transcript) == "ExampleApp"
+    assert build_cases._infer_cwd({"cwd_base": "KnownApp"}, transcript) == "KnownApp"
+    assert build_cases._infer_cwd({"cwd": "/home/user/RealApp"}, transcript) == "/home/user/RealApp"
 
 
 def test_gate_eval_metrics_fire_rate_and_recall(tmp_path, monkeypatch):

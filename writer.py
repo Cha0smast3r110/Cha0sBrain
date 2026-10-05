@@ -195,29 +195,72 @@ def sanitize_tags(raw_tags) -> list[str]:
     return cleaned
 
 
+
+
+def _yaml_double_quoted(value: str) -> str:
+    """Return a YAML-safe double-quoted scalar for one-line strings."""
+    collapsed = re.sub(r"\s+", " ", str(value or "")).strip()
+    return '"' + collapsed.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _sanitize_trigger_terms(raw_terms) -> list[str]:
+    """Normalize trigger_terms like tags, but allow 3-40 chars for card terms."""
+    if not isinstance(raw_terms, list):
+        return []
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for term in raw_terms:
+        if not isinstance(term, str):
+            continue
+        normalized = term.lower().strip().replace("_", "-").replace(" ", "-")
+        normalized = re.sub(r"[^a-z0-9-]", "", normalized)
+        normalized = re.sub(r"-+", "-", normalized).strip("-")
+        if not (3 <= len(normalized) <= 40):
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(normalized)
+    return cleaned
+
 def build_frontmatter(topic: dict, session_id: str, date: str) -> str:
     """Build YAML frontmatter for a vault entry."""
     clean_tags = sanitize_tags(topic.get("tags", []))
     tags_str = ", ".join(clean_tags)
+    raw_lesson = topic.get("lesson")
+    lesson = re.sub(r"\s+", " ", raw_lesson).strip() if isinstance(raw_lesson, str) else ""
     raw_summary = topic.get("summary", "") or ""
     # Single-line, max 140 chars — used by inject.py at SessionStart.
-    description = re.sub(r"\s+", " ", raw_summary).strip()[:140]
-    # YAML double-quoted scalar: escape backslash + quote so a ': ' or other
-    # special char inside the summary can't break frontmatter parsing.
-    # (Whitespace is already collapsed above, so no control chars remain.)
-    description_yaml = '"' + description.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return (
-        f"---\n"
-        f"tags: [{tags_str}]\n"
-        f"wing: {topic['wing']}\n"
-        f"type: {topic['type']}\n"
-        f"project: {topic['project']}\n"
-        f"date: {date}\n"
-        f"session_id: {session_id}\n"
-        f"difficulty: {topic['difficulty']}\n"
-        f"description: {description_yaml}\n"
-        f"---\n"
-    )
+    description_source = lesson if lesson else raw_summary
+    description = re.sub(r"\s+", " ", description_source).strip()[:140]
+    description_yaml = _yaml_double_quoted(description)
+
+    lines = [
+        "---",
+        f"tags: [{tags_str}]",
+        f"wing: {topic['wing']}",
+        f"type: {topic['type']}",
+        f"project: {topic['project']}",
+        f"date: {date}",
+        f"session_id: {session_id}",
+        f"difficulty: {topic['difficulty']}",
+        f"description: {description_yaml}",
+    ]
+    if lesson:
+        trigger = re.sub(r"\s+", " ", str(topic.get("trigger") or "")).strip()
+        evidence = re.sub(r"\s+", " ", str(topic.get("evidence") or "")).strip()
+        trigger_terms = _sanitize_trigger_terms(topic.get("trigger_terms"))
+        terms_str = ", ".join(trigger_terms)
+        lines.extend([
+            f"lesson: {_yaml_double_quoted(lesson)}",
+            f"trigger: {_yaml_double_quoted(trigger)}",
+            f"trigger_terms: [{terms_str}]",
+            f"evidence: {_yaml_double_quoted(evidence)}",
+            "card_version: 1",
+            "seen_sessions: 1",
+        ])
+    lines.append("---")
+    return "\n".join(lines) + "\n"
 
 
 def determine_output_path(vault_path: str, wing: str, slug: str) -> Path:

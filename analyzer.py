@@ -343,7 +343,7 @@ ANALYZER_SCHEMA = json.dumps({
 
 
 def filter_timeless_topics(topics: list) -> list:
-    """Drop analyzer topics explicitly marked as volatile."""
+    """Drop volatile topics and non-recherche topics without a lesson card."""
     kept = []
     for topic in topics:
         if not isinstance(topic, dict):
@@ -351,6 +351,9 @@ def filter_timeless_topics(topics: list) -> list:
             continue
         if str(topic.get("keep", "timeless")).strip().lower() == "volatile":
             logger.info(f"Filtered volatile topic: {topic.get('title', '<untitled>')} (volatile)")
+            continue
+        if topic.get("lesson") is None and topic.get("type") != "recherche":
+            logger.info(f"Skip (keine Lektion): {topic.get('slug', '<untitled>')}")
             continue
         kept.append(topic)
     return kept

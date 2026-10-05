@@ -90,3 +90,48 @@ def test_frontmatter_strips_newlines_from_summary():
     desc_line = next(l for l in fm.splitlines() if l.startswith("description:"))
     assert "\n" not in desc_line[len("description: "):]
     assert "Line one. Line two. Line three." in desc_line
+
+
+
+def test_frontmatter_with_lesson_card_uses_lesson_description_and_validates():
+    import stylecheck
+
+    topic = {
+        "wing": "devtools", "type": "troubleshooting", "project": "example-app",
+        "difficulty": "intermediate", "tags": ["redis"],
+        "summary": "Tagebuchsatz, der nicht mehr injiziert werden soll.",
+        "lesson": "Wenn der Worker queued bleibt, liegt es an einem Redis-URL-Mismatch; Fix: API und Worker auf dieselbe REDIS_URL setzen.",
+        "trigger": "Worker bleibt queued trotz laufendem Prozess",
+        "trigger_terms": ["redis-url-mismatch", "queued-worker", "worker-process"],
+        "evidence": "commit abc123 / src/worker.py:42",
+    }
+    fm = writer.build_frontmatter(topic, "sess-1", "2026-10-06")
+    parsed = _parse_frontmatter(fm)
+
+    assert parsed["description"] == topic["lesson"][:140]
+    assert parsed["lesson"] == topic["lesson"]
+    assert parsed["trigger_terms"] == ["redis-url-mismatch", "queued-worker", "worker-process"]
+    assert parsed["card_version"] == 1
+    assert parsed["seen_sessions"] == 1
+    assert stylecheck.card_is_valid(parsed) is True
+    body = "\n# Titel\n\n"
+    for s in ["TL;DR", "Symptome", "Kontext", "Schritt-für-Schritt Lösung", "Falls es nicht klappt"]:
+        body += f"## {s}\n\n" + ("x" * 250) + "\n\n"
+    assert stylecheck.validate(fm + body, "troubleshooting").passed
+
+
+def test_frontmatter_card_escapes_quotes_and_colons():
+    topic = {
+        "wing": "devtools", "type": "anleitung", "project": "example-app",
+        "difficulty": "beginner", "tags": [], "summary": "Fallback",
+        "lesson": 'Wenn "queue: pending" bleibt, liegt es an Config: Fix: Worker neu starten.',
+        "trigger": 'Log zeigt "queue: pending"',
+        "trigger_terms": ["queue-pending", "worker-restart", "redis-config"],
+        "evidence": 'Fehler: "queue: pending" in worker.log:12',
+    }
+
+    parsed = _parse_frontmatter(writer.build_frontmatter(topic, "sess-1", "2026-10-06"))
+
+    assert parsed["lesson"] == topic["lesson"]
+    assert parsed["trigger"] == topic["trigger"]
+    assert parsed["evidence"] == topic["evidence"]

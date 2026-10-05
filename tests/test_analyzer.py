@@ -92,9 +92,9 @@ class TestTimelessGate:
     def test_filters_volatile_topics_and_keeps_missing_field(self, caplog):
         caplog.set_level("INFO")
         topics = [
-            {"title": "How-To behalten", "slug": "keep", "keep": "timeless"},
+            {"title": "How-To behalten", "slug": "keep", "keep": "timeless", "lesson": "Wenn X passiert, liegt es an Y; Fix: Z konkret ausführen."},
             {"title": "Tagesstatus raus", "slug": "drop", "keep": "volatile"},
-            {"title": "Altes Schema behalten", "slug": "legacy"},
+            {"title": "Altes Schema behalten", "slug": "legacy", "lesson": "Wenn A passiert, liegt es an B; Fix: C konkret ausführen."},
         ]
 
         out = filter_timeless_topics(topics)
@@ -130,3 +130,16 @@ def test_parse_analyzer_response_passes_card_fields_and_defaults_missing_to_none
     assert result[1]["evidence"] is None
     assert result[1]["derivable"] is None
 
+
+def test_filter_timeless_topics_skips_missing_lesson_except_recherche(caplog):
+    caplog.set_level("INFO")
+    topics = [
+        {"title": "Lektion", "slug": "lesson", "type": "anleitung", "keep": "timeless", "lesson": "Wenn X, dann Y; Fix: Z."},
+        {"title": "Keine Lektion", "slug": "no-lesson", "type": "troubleshooting", "keep": "timeless", "lesson": None},
+        {"title": "Recherche", "slug": "research", "type": "recherche", "keep": "timeless", "lesson": None},
+    ]
+
+    out = filter_timeless_topics(topics)
+
+    assert [topic["slug"] for topic in out] == ["lesson", "research"]
+    assert "Skip (keine Lektion): no-lesson" in caplog.text

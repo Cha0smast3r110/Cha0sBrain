@@ -12,6 +12,8 @@ import os
 import re
 from pathlib import Path
 
+import yaml
+
 CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 DEFAULT_VAULT_PATH = os.path.expanduser("~/cha0sbrain-vault")
 
@@ -137,6 +139,85 @@ def parse_frontmatter(content: str) -> dict:
             value = value[1:-1]
         result[key] = value
     return result
+
+
+def parse_typed_frontmatter(content: str) -> dict:
+    """Parse YAML frontmatter with real scalar/list types.
+
+    `parse_frontmatter` intentionally stays a tiny flat parser for hot hook paths.
+    Card validation, embedding text selection and dedup need typed YAML values
+    (`seen_sessions: 1`, `trigger_terms: [...]`), so they use this helper.
+    Returns {} on malformed or missing frontmatter.
+    """
+    if not content.startswith("---\n") and not content.startswith("---\r\n"):
+        return {}
+    lines = content.splitlines()
+    if not lines or lines[0] != "---":
+        return {}
+    end_idx = None
+    for i in range(1, len(lines)):
+        if lines[i] == "---":
+            end_idx = i
+            break
+    if end_idx is None:
+        return {}
+    try:
+        parsed = yaml.safe_load("\n".join(lines[1:end_idx]))
+    except yaml.YAMLError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_trigger_terms(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(term) for term in value if isinstance(term, str)]
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.startswith("[") or not stripped.endswith("]"):
+            return []
+        try:
+            parsed = yaml.safe_load(stripped)
+        except yaml.YAMLError:
+            return []
+        if isinstance(parsed, list):
+            return [str(term) for term in parsed if isinstance(term, str)]
+    return []
+
+
+def card_embedding_text(fm: dict) -> str:
+    """Return the canonical embedding/comparison text for a valid lesson card."""
+    try:
+        import stylecheck
+
+        if not stylecheck.card_is_valid(fm):
+            return ""
+    except Exception:
+        return ""
+    terms = _coerce_trigger_terms(fm.get("trigger_terms"))
+    parts = [
+        str(fm.get("lesson", "")).strip(),
+        str(fm.get("trigger", "")).strip(),
+        " ".join(term.strip() for term in terms if term.strip()),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def entry_embedding_text(content: str, fallback_title: str) -> str:
+    """Canonical text used for embedding and write-time dedup.
+
+    Valid lesson cards embed the card text; legacy/invalid-card entries keep the
+    historical `title + description` behavior so old recherche entries still use
+    the existing near-duplicate gate.
+    """
+    fm = parse_typed_frontmatter(content)
+    card_text = card_embedding_text(fm)
+    if card_text:
+        return card_text
+    title = _extract_title(content, fallback_title)
+    description = str(fm.get("description", "")).strip()
+    if not description:
+        description = str(parse_frontmatter(content).get("description", "")).strip()
+    return (title + " " + description).strip()
 
 
 def load_tag_index(vault_path: str) -> dict:

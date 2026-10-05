@@ -12,7 +12,7 @@ import semantic
 
 
 def iter_entry_texts(vault_path: str):
-    """Yield (ref, title_and_description) for vault entries in wing folders."""
+    """Yield (ref, embedding_text) for vault entries in wing folders."""
     vault = Path(vault_path)
     for path in sorted(vault.glob("*/*.md")):
         wing = path.parent.name
@@ -23,10 +23,7 @@ def iter_entry_texts(vault_path: str):
             content = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        fm = vaultlib.parse_frontmatter(content)
-        title = vaultlib._extract_title(content, slug.replace("-", " "))
-        description = str(fm.get("description", "")).strip()
-        text = (title + " " + description).strip()
+        text = vaultlib.entry_embedding_text(content, slug.replace("-", " "))
         if text:
             yield f"{wing}/{slug}", text
 

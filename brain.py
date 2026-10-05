@@ -114,19 +114,102 @@ PROCESSED_SESSIONS_FILE = LOG_DIR / "processed_sessions.json"
 NEAR_DUPLICATE_THRESHOLD = 0.82  # Cosine; empirisch bestimmt (Audit 2026-08-29):
 # echte Near-Dupes >=0.82, thematisch verschiedene Einträge <=0.48. Symmetrischer
 # title+description-Vergleich gegen den Bestand.
+CARD_MERGE_THRESHOLD = 0.80  # [ANNAHME] Wird in S4.2 nach Karten-Backfill gemessen.
 
 
 def _entry_embed_text(path: "Path") -> str:
-    """title + ' ' + description aus einer geschriebenen Vault-.md — wie build_embeddings."""
+    """Embedding-/Dedup-Text aus einer geschriebenen Vault-.md — wie build_embeddings."""
     try:
         content = path.read_text(encoding="utf-8")
     except OSError:
         return ""
     import vaultlib
-    fm = vaultlib.parse_frontmatter(content)
-    title = vaultlib._extract_title(content, path.stem.replace("-", " "))
-    description = str(fm.get("description", "")).strip()
-    return (title + " " + description).strip()
+    return vaultlib.entry_embedding_text(content, path.stem.replace("-", " "))
+
+
+def _card_info(path: "Path") -> dict | None:
+    """Return typed frontmatter/content for a valid card entry; None otherwise."""
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        import stylecheck
+        import vaultlib
+
+        fm = vaultlib.parse_typed_frontmatter(content)
+        if not stylecheck.card_is_valid(fm):
+            return None
+    except Exception:
+        return None
+    return {"fm": fm, "content": content}
+
+
+def _entry_has_valid_card(path: "Path") -> bool:
+    return _card_info(path) is not None
+
+
+def _path_for_ref(vault_path: str, ref: str) -> "Path | None":
+    if "/" not in ref:
+        return None
+    wing, slug = ref.split("/", 1)
+    return Path(vault_path, wing, slug + ".md")
+
+
+def _replace_seen_sessions(content: str, new_value: int) -> str | None:
+    lines = content.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return None
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            break
+        if lines[idx].lstrip().startswith("seen_sessions:"):
+            newline = "\n" if lines[idx].endswith("\n") else ""
+            lines[idx] = f"seen_sessions: {new_value}{newline}"
+            return "".join(lines)
+    return None
+
+
+def _append_further_case(content: str, date: str, evidence: str) -> str:
+    evidence = " ".join(str(evidence or "").split())
+    line = f"- {date}: {evidence}"
+    lines = content.rstrip().splitlines()
+    try:
+        heading_idx = next(i for i, row in enumerate(lines) if row.strip() == "## Weitere Fälle")
+    except StopIteration:
+        return content.rstrip() + f"\n\n## Weitere Fälle\n{line}\n"
+
+    insert_idx = len(lines)
+    for i in range(heading_idx + 1, len(lines)):
+        if lines[i].startswith("## "):
+            insert_idx = i
+            break
+    lines.insert(insert_idx, line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _merge_card_duplicate(existing_path: "Path", new_path: "Path") -> bool:
+    existing = _card_info(existing_path)
+    new = _card_info(new_path)
+    if existing is None or new is None:
+        return False
+
+    existing_fm = existing["fm"]
+    new_fm = new["fm"]
+    seen = int(existing_fm.get("seen_sessions", 1)) + 1
+    updated = _replace_seen_sessions(existing["content"], seen)
+    if updated is None:
+        return False
+    date = str(new_fm.get("date") or datetime.now().date().isoformat())
+    evidence = str(new_fm.get("evidence") or "")
+    updated = _append_further_case(updated, date, evidence)
+
+    try:
+        existing_path.write_text(updated, encoding="utf-8")
+        new_path.unlink()
+    except OSError:
+        return False
+    return True
 
 
 def dedup_written_entries(write_result, vault_path: str, logger) -> None:
@@ -149,24 +232,37 @@ def dedup_written_entries(write_result, vault_path: str, logger) -> None:
             if not text:
                 kept.append(path)
                 continue
+            is_card = _entry_has_valid_card(path)
             vec = semantic.embed_text(text, prefix="document: ")
             if not vec:
                 kept.append(path)  # Embed-Server aus => behalten
                 continue
+            threshold = CARD_MERGE_THRESHOLD if is_card else NEAR_DUPLICATE_THRESHOLD
             neighbors = semantic.semantic_neighbors(
-                vec, existing, top_k=1, min_sim=NEAR_DUPLICATE_THRESHOLD
+                vec, existing, top_k=1, min_sim=threshold
             )
             if neighbors:
                 dup_ref, sim = next(iter(neighbors.items()))
-                try:
-                    path.unlink()
-                except OSError:
-                    kept.append(path)
+                if is_card:
+                    existing_path = _path_for_ref(vault_path, dup_ref)
+                    if existing_path is not None and _merge_card_duplicate(existing_path, path):
+                        logger.info(
+                            f"Dedup: merged lesson card {path.name} "
+                            f"(cosine {sim:.3f} vs existing {dup_ref})"
+                        )
+                    else:
+                        kept.append(path)
                     continue
-                logger.info(
-                    f"Dedup: removed near-duplicate {path.name} "
-                    f"(cosine {sim:.3f} vs existing {dup_ref})"
-                )
+                else:
+                    try:
+                        path.unlink()
+                    except OSError:
+                        kept.append(path)
+                        continue
+                    logger.info(
+                        f"Dedup: removed near-duplicate {path.name} "
+                        f"(cosine {sim:.3f} vs existing {dup_ref})"
+                    )
             else:
                 kept.append(path)
         write_result.written = kept

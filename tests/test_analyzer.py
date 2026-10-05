@@ -143,3 +143,22 @@ def test_filter_timeless_topics_skips_missing_lesson_except_recherche(caplog):
 
     assert [topic["slug"] for topic in out] == ["lesson", "research"]
     assert "Skip (keine Lektion): no-lesson" in caplog.text
+
+
+def test_filter_normalisiert_research_und_leere_lektion():
+    from analyzer import filter_timeless_topics
+    topics = [
+        {"title": "a", "slug": "a", "type": "research", "lesson": None},
+        {"title": "b", "slug": "b", "type": "troubleshooting", "lesson": "   "},
+    ]
+    kept = filter_timeless_topics(topics)
+    assert [t["slug"] for t in kept] == ["a"]
+    assert kept[0]["type"] == "recherche"
+
+
+def test_karte_mit_300_zeichen_bleibt_gueltig():
+    import stylecheck
+    fm = {"lesson": "Wenn X, liegt es an Y; Fix: Z. " + "x" * 270, "trigger": "beim Deploy",
+          "trigger_terms": ["redis-url", "worker-queued", "celery"], "evidence": "commit abc",
+          "card_version": 1, "seen_sessions": 1}
+    assert stylecheck.card_is_valid(fm)

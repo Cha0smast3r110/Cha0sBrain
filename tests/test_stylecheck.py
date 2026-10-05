@@ -296,7 +296,7 @@ def test_card_schema_long_lesson_warns_and_is_invalid():
     from stylecheck import card_is_valid, validate
     import yaml
 
-    fm = make_frontmatter(extra=_valid_card_extra(lesson='"' + ("x" * 300) + '"'))
+    fm = make_frontmatter(extra=_valid_card_extra(lesson='"' + ("x" * 400) + '"'))
     result = validate(fm + "\n# Titel\n\nBody\n", "anleitung")
     parsed = yaml.safe_load(fm.split("---", 2)[1])
 

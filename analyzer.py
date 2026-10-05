@@ -352,7 +352,9 @@ def filter_timeless_topics(topics: list) -> list:
         if str(topic.get("keep", "timeless")).strip().lower() == "volatile":
             logger.info(f"Filtered volatile topic: {topic.get('title', '<untitled>')} (volatile)")
             continue
-        if topic.get("lesson") is None and topic.get("type") != "recherche":
+        if topic.get("type") == "research":
+            topic["type"] = "recherche"  # Haiku liefert gelegentlich die englische Form
+        if not str(topic.get("lesson") or "").strip() and topic.get("type") != "recherche":
             logger.info(f"Skip (keine Lektion): {topic.get('slug', '<untitled>')}")
             continue
         kept.append(topic)

@@ -40,6 +40,13 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
 
 MIN_SECTION_LEN = 200
 
+# Lektionskarte: der Analyzer-Prompt verlangt max 220 Zeichen, Haiku ueberzieht
+# das aber regelmaessig (gemessen 2026-10-06: 2 von 4 echten Karten bei 250-400).
+# Die harte Grenze liegt deshalb hoeher, damit eine gute, etwas lange Karte nicht
+# still unbrauchbar wird; 2 Karten bleiben so unter ~700 Zeichen Injektion.
+LESSON_MIN_CHARS = 30
+LESSON_MAX_CHARS = 320
+
 FORBIDDEN_PHRASES = ["wie du weißt", "standardmäßig", "klassischerweise", "bekanntlich"]
 
 GENERIC_TERMS = {
@@ -230,8 +237,8 @@ def _card_schema_errors(fm: dict | None) -> list[str]:
 
     errors: list[str] = []
     lesson = fm.get("lesson")
-    if not isinstance(lesson, str) or not (30 <= len(lesson.strip()) <= 220):
-        errors.append("lesson must be a string with 30-220 chars")
+    if not isinstance(lesson, str) or not (LESSON_MIN_CHARS <= len(lesson.strip()) <= LESSON_MAX_CHARS):
+        errors.append(f"lesson must be a string with {LESSON_MIN_CHARS}-{LESSON_MAX_CHARS} chars")
 
     trigger = fm.get("trigger")
     if not isinstance(trigger, str) or not trigger.strip() or len(trigger.strip()) > 120:

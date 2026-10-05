@@ -130,3 +130,30 @@ def test_incremental_scan_skips_quarantine_dir(vault, logs_dir):
     report = lint_incremental(vault, state_path, warnings_path=warnings_path)
 
     assert report.scanned == 0
+
+
+
+def test_incremental_scan_invalid_card_warns_without_quarantine(vault, logs_dir):
+    from lint import lint_incremental
+
+    fm = make_frontmatter(extra={
+        "lesson": '"' + ("x" * 300) + '"',
+        "trigger": '"Queue bleibt hängen"',
+        "trigger_terms": "[testing, api, server]",
+        "evidence": '"commit abc123"',
+        "card_version": "1",
+        "seen_sessions": "1",
+    })
+    path = vault / "devtools" / "invalid-card.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(fm + "\n" + _valid_anleitung_body(), encoding="utf-8")
+    state_path = logs_dir / "lint_state.json"
+    warnings_path = logs_dir / "lint_warnings.jsonl"
+
+    report = lint_incremental(vault, state_path, warnings_path=warnings_path)
+
+    assert report.scanned == 1
+    assert report.quarantined == 0
+    assert path.exists()
+    assert not (vault / "_quarantine" / "invalid-card.md").exists()
+    assert "card_schema" in warnings_path.read_text(encoding="utf-8")

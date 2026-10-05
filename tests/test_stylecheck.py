@@ -259,3 +259,68 @@ def test_normalize_no_false_positive_on_lesung():
     # "Lesung" must NOT collapse to "losung" — it has no oe
     assert _normalize("Lesung") == "lesung"
     assert "losung" not in _normalize("Lesung")
+
+
+
+def _valid_card_extra(**overrides):
+    data = {
+        "lesson": '"Wenn der Worker queued bleibt, liegt es an Redis-URL-Mismatch; Fix: dieselbe REDIS_URL in API und Worker setzen."',
+        "trigger": '"Worker bleibt queued trotz laufendem Prozess"',
+        "trigger_terms": "[redis-url-mismatch, queued-worker, worker-process]",
+        "evidence": '"commit abc123 / src/worker.py:42"',
+        "card_version": "1",
+        "seen_sessions": "1",
+    }
+    data.update(overrides)
+    return data
+
+
+def test_card_schema_valid_card_has_no_warning_and_is_valid():
+    from stylecheck import card_is_valid, validate
+    import yaml
+
+    fm = make_frontmatter(entry_type="anleitung", extra=_valid_card_extra())
+    body = "\n# Titel\n\n"
+    for s in ["Worum geht's?", "Problemstellung", "Hintergrundwissen", "Lösung", "Cheatsheet"]:
+        body += f"## {s}\n\n" + ("x" * 250) + "\n\n"
+
+    result = validate(fm + body, "anleitung")
+    parsed = yaml.safe_load(fm.split("---", 2)[1])
+
+    assert result.passed
+    assert not [w for w in result.warnings if w["rule"] == "card_schema"]
+    assert card_is_valid(parsed) is True
+
+
+def test_card_schema_long_lesson_warns_and_is_invalid():
+    from stylecheck import card_is_valid, validate
+    import yaml
+
+    fm = make_frontmatter(extra=_valid_card_extra(lesson='"' + ("x" * 300) + '"'))
+    result = validate(fm + "\n# Titel\n\nBody\n", "anleitung")
+    parsed = yaml.safe_load(fm.split("---", 2)[1])
+
+    assert any(w["rule"] == "card_schema" for w in result.warnings)
+    assert card_is_valid(parsed) is False
+
+
+def test_card_schema_rejects_generic_trigger_terms():
+    from stylecheck import card_is_valid
+    import yaml
+
+    fm = make_frontmatter(extra=_valid_card_extra(trigger_terms="[testing, api, server]"))
+    parsed = yaml.safe_load(fm.split("---", 2)[1])
+
+    assert card_is_valid(parsed) is False
+
+
+def test_card_schema_absent_card_has_no_warning_and_is_invalid_card_only():
+    from stylecheck import card_is_valid, validate
+    import yaml
+
+    fm = make_frontmatter()
+    result = validate(fm + "\n# Titel\n\nBody\n", "anleitung")
+    parsed = yaml.safe_load(fm.split("---", 2)[1])
+
+    assert not [w for w in result.warnings if w["rule"] == "card_schema"]
+    assert card_is_valid(parsed) is False

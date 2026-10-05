@@ -42,6 +42,18 @@ MIN_SECTION_LEN = 200
 
 FORBIDDEN_PHRASES = ["wie du weißt", "standardmäßig", "klassischerweise", "bekanntlich"]
 
+GENERIC_TERMS = {
+    "testing", "test", "tests", "api", "server", "workflow",
+    "automation", "management", "content", "verification", "contract",
+    "tools", "tool", "code", "script", "config", "setup", "claude",
+    "projekt", "project", "fix", "bug", "update", "data",
+}
+
+CARD_KEYS = {
+    "lesson", "trigger", "trigger_terms", "evidence", "card_version",
+    "seen_sessions", "stale", "stale_reason",
+}
+
 
 def _normalize(text: str) -> str:
     # Real umlauts first (single-char → single-char), then ASCII
@@ -183,6 +195,102 @@ def _check_forbidden_phrases(body: str) -> list[dict]:
     return warnings
 
 
+_TERM_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
+
+
+def _coerce_trigger_terms(value) -> list[str] | None:
+    """Return trigger_terms as list, accepting YAML lists and flat parser strings."""
+    if isinstance(value, list):
+        terms = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.startswith("[") or not stripped.endswith("]"):
+            return None
+        try:
+            parsed = yaml.safe_load(stripped)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(parsed, list):
+            return None
+        terms = parsed
+    else:
+        return None
+    if not all(isinstance(term, str) for term in terms):
+        return None
+    return terms
+
+
+def _card_schema_errors(fm: dict | None) -> list[str]:
+    """Return card schema violations. Empty list means valid card or no card."""
+    if not isinstance(fm, dict):
+        return []
+    present = CARD_KEYS & set(fm.keys())
+    if not present:
+        return []
+
+    errors: list[str] = []
+    lesson = fm.get("lesson")
+    if not isinstance(lesson, str) or not (30 <= len(lesson.strip()) <= 220):
+        errors.append("lesson must be a string with 30-220 chars")
+
+    trigger = fm.get("trigger")
+    if not isinstance(trigger, str) or not trigger.strip() or len(trigger.strip()) > 120:
+        errors.append("trigger must be a non-empty string with <=120 chars")
+
+    terms = _coerce_trigger_terms(fm.get("trigger_terms"))
+    if terms is None:
+        errors.append("trigger_terms must be a YAML list")
+    else:
+        if not (3 <= len(terms) <= 8):
+            errors.append("trigger_terms must contain 3-8 entries")
+        for term in terms:
+            if term != term.lower():
+                errors.append(f"trigger_term must be lowercase: {term!r}")
+            if not _TERM_RE.match(term):
+                errors.append(f"trigger_term must be 3-40 lowercase chars: {term!r}")
+            if term in GENERIC_TERMS:
+                errors.append(f"trigger_term is generic: {term!r}")
+
+    evidence = fm.get("evidence")
+    if not isinstance(evidence, str) or len(evidence.strip()) > 200:
+        errors.append("evidence must be a string with <=200 chars")
+
+    if not isinstance(fm.get("card_version"), int):
+        errors.append("card_version must be an int")
+
+    seen_sessions = fm.get("seen_sessions")
+    if not isinstance(seen_sessions, int) or seen_sessions < 1:
+        errors.append("seen_sessions must be an int >=1")
+
+    if "stale" in fm and not isinstance(fm.get("stale"), bool):
+        errors.append("stale must be a bool")
+    if "stale_reason" in fm and not isinstance(fm.get("stale_reason"), str):
+        errors.append("stale_reason must be a string")
+
+    return errors
+
+
+def card_is_valid(fm: dict) -> bool:
+    """Return True only for complete, valid lesson-card frontmatter."""
+    if not isinstance(fm, dict):
+        return False
+    if not (CARD_KEYS & set(fm.keys())):
+        return False
+    return not _card_schema_errors(fm)
+
+
+def _check_card_schema(fm: dict | None) -> list[dict]:
+    errors = _card_schema_errors(fm)
+    if not errors:
+        return []
+    return [{
+        "rule": "card_schema",
+        "detail": "; ".join(errors),
+        "line": None,
+        "snippet": "",
+    }]
+
+
 def validate(content: str, entry_type: str) -> ValidationResult:
     if entry_type not in VALID_ENTRY_TYPES:
         raise ValueError(f"unknown entry_type: {entry_type!r}")
@@ -211,5 +319,6 @@ def validate(content: str, entry_type: str) -> ValidationResult:
     errors.extend(_check_sections(body, entry_type))
 
     warnings.extend(_check_forbidden_phrases(body))
+    warnings.extend(_check_card_schema(fm))
 
     return ValidationResult(passed=not errors, errors=errors, warnings=warnings)

@@ -77,3 +77,20 @@ def test_eigene_analyse_aufrufe_bekommen_nichts(tmp_path, monkeypatch):
                 "cwd": "/home/user/example-agent", "session_id": "s-analyse"})
     assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
     assert not list(tmp_path.glob(".cha0sbrain-*s-analyse*"))
+
+
+def test_schalter_aus_injiziert_nichts(tmp_path, monkeypatch):
+    idx = {"ollama-tooling": ["devtools/ollama-client"]}
+    (tmp_path / "_tag_index.json").write_text(json.dumps(idx), encoding="utf-8")
+    dt = tmp_path / "devtools"; dt.mkdir()
+    (dt / "ollama-client.md").write_text(
+        "---\nproject: example-agent\ndate: 2026-06-01\n"
+        "description: Ollama tool parsing fix\n---\n# Ollama Client\n", encoding="utf-8")
+    monkeypatch.setattr(prompt_inject, "_resolve_vault", lambda: str(tmp_path))
+    monkeypatch.setattr(prompt_inject, "HOME_CLAUDE", tmp_path)
+    monkeypatch.delenv("CHA0SBRAIN_RUNNING", raising=False)
+    monkeypatch.setattr(prompt_inject, "injection_enabled", lambda: False)
+    out = _run({"prompt": "ollama tool parsing problem",
+                "cwd": "/home/user/example-agent", "session_id": "s-aus"})
+    assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
+    assert not list(tmp_path.glob(".cha0sbrain-*s-aus*"))

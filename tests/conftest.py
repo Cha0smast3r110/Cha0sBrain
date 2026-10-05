@@ -47,3 +47,13 @@ def make_frontmatter(
             lines.append(f"{key}: {value}")
     lines.append("---")
     return "\n".join(lines) + "\n"
+
+
+@pytest.fixture(autouse=True)
+def _injektion_unabhaengig_von_live_config(monkeypatch):
+    """Tests duerfen nicht vom Live-Schalter in config.json abhaengen
+    (dort ist die Injektion seit 2026-10-05 pausiert) und nicht von einer
+    gesetzten Re-Entry-Variable der aufrufenden Shell."""
+    import prompt_inject
+    monkeypatch.setattr(prompt_inject, "injection_enabled", lambda: True)
+    monkeypatch.delenv("CHA0SBRAIN_RUNNING", raising=False)

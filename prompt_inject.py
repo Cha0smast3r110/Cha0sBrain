@@ -53,6 +53,19 @@ def holdout_rate() -> float:
         return DEFAULT_HOLDOUT_RATE
 
 
+def injection_enabled() -> bool:
+    """Schalter fuer die ganze Injektion (config.json: "injection_enabled").
+
+    Pausiert seit 2026-10-05: das Kontrollgruppen-Experiment fand keinen Nutzen,
+    bis zum Umbau von Gate und Vault wird nichts eingespielt."""
+    try:
+        cfg_path = Path(__file__).resolve().parent / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return bool(cfg.get("injection_enabled", True))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return True
+
+
 def is_holdout(session_id: str, rate: float | None = None) -> bool:
     """Gehoert diese Sitzung zur Kontrollgruppe? Stabil ueber alle Prompts."""
     r = holdout_rate() if rate is None else rate
@@ -145,7 +158,7 @@ def main(stdin=None, stdout=None) -> int:
     # Eigene Analyse-Aufrufe (analyzer.call_claude setzt die Variable) bekommen
     # nichts: sonst landen Lessons im Analyse-Prompt und je Lauf eine
     # Phantom-Begleitdatei ohne Transkript.
-    if os.environ.get("CHA0SBRAIN_RUNNING"):
+    if os.environ.get("CHA0SBRAIN_RUNNING") or not injection_enabled():
         _emit(stdout, "")
         return 0
     try:

@@ -21,6 +21,8 @@ import vaultlib
 MIN_SCORE = 4.0
 LIMIT = 3
 HOME_CLAUDE = Path(os.path.expanduser("~/.claude"))
+DIAG_LOG = Path(__file__).resolve().parent / "logs" / "inject_diag.jsonl"
+DIAG_LOG_MAX_BYTES = 20 * 1024 * 1024
 
 # --- Kontrollgruppe ----------------------------------------------------------
 # Ohne Gegenprobe ist jede Ersparnis-Zahl geraten: man sieht nur Sitzungen MIT
@@ -152,21 +154,63 @@ def _emit(stdout, ctx: str) -> None:
     }))
 
 
+def _log_diag(payload: dict) -> None:
+    """Best-effort Diagnosezeile fuer Gate-Messung; darf den Hook nie stoeren."""
+    try:
+        if os.environ.get("CHA0SBRAIN_RUNNING"):
+            return
+        if DIAG_LOG.exists() and DIAG_LOG.stat().st_size > DIAG_LOG_MAX_BYTES:
+            return
+        prompt = str(payload.get("prompt", ""))
+        cwd = str(payload.get("cwd", ""))
+        transcript_path = payload.get("transcript_path")
+        has_transcript = bool(transcript_path) and Path(str(transcript_path)).exists()
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_id": str(payload.get("session_id", "") or "nosession"),
+            "cwd_base": os.path.basename(cwd.rstrip(os.sep)) if cwd else "",
+            "env_kind": os.environ.get("CLAUDE_CODE_ENVIRONMENT_KIND"),
+            "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT"),
+            "child": os.environ.get("CLAUDE_CODE_CHILD_SESSION"),
+            "attended": os.environ.get("CLAUDE_CODE_SESSION_ATTENDED"),
+            "permission_mode": payload.get("permission_mode"),
+            "has_transcript": has_transcript,
+            "prompt_len": len(prompt),
+            "prompt_head": prompt[:60],
+        }
+        DIAG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DIAG_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        # Diagnose ist nur Messbasis; Hook-Ausgabe muss auch bei kaputtem Logpfad stabil bleiben.
+        return
+
+
 def main(stdin=None, stdout=None) -> int:
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
-    # Eigene Analyse-Aufrufe (analyzer.call_claude setzt die Variable) bekommen
-    # nichts: sonst landen Lessons im Analyse-Prompt und je Lauf eine
-    # Phantom-Begleitdatei ohne Transkript.
-    if os.environ.get("CHA0SBRAIN_RUNNING") or not injection_enabled():
-        _emit(stdout, "")
-        return 0
     try:
         raw = stdin.read() or ""
         try:
             payload = json.loads(raw) if raw.strip() else {}
         except json.JSONDecodeError:
             payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        # Eigene Analyse-Aufrufe (analyzer.call_claude setzt die Variable) bekommen
+        # nichts: sonst landen Lessons im Analyse-Prompt und je Lauf eine
+        # Phantom-Begleitdatei ohne Transkript. Auch die Diagnose schweigt hier.
+        if os.environ.get("CHA0SBRAIN_RUNNING"):
+            _emit(stdout, "")
+            return 0
+
+        _log_diag(payload)
+
+        if not injection_enabled():
+            _emit(stdout, "")
+            return 0
+
         prompt = str(payload.get("prompt", ""))
         cwd = str(payload.get("cwd", ""))
         session_id = str(payload.get("session_id", "") or "nosession")

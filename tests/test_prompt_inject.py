@@ -94,3 +94,63 @@ def test_schalter_aus_injiziert_nichts(tmp_path, monkeypatch):
                 "cwd": "/home/user/example-agent", "session_id": "s-aus"})
     assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
     assert not list(tmp_path.glob(".cha0sbrain-*s-aus*"))
+
+
+def test_diag_log_writes_one_line_even_when_injection_paused(tmp_path, monkeypatch):
+    log_path = tmp_path / "inject_diag.jsonl"
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(prompt_inject, "DIAG_LOG", log_path)
+    monkeypatch.setattr(prompt_inject, "injection_enabled", lambda: False)
+    monkeypatch.setenv("CLAUDE_CODE_ENVIRONMENT_KIND", "local")
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+    monkeypatch.setenv("CLAUDE_CODE_CHILD_SESSION", "0")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ATTENDED", "1")
+
+    out = _run({
+        "prompt": "diagnose prompt",
+        "session_id": "diag-s1",
+        "cwd": "/home/user/example-app",
+        "permission_mode": "default",
+        "transcript_path": str(transcript),
+    })
+
+    assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
+    rows = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1
+    row = json.loads(rows[0])
+    assert row["session_id"] == "diag-s1"
+    assert row["cwd_base"] == "example-app"
+    assert row["env_kind"] == "local"
+    assert row["entrypoint"] == "cli"
+    assert row["child"] == "0"
+    assert row["attended"] == "1"
+    assert row["permission_mode"] == "default"
+    assert row["has_transcript"] is True
+    assert row["prompt_len"] == len("diagnose prompt")
+    assert row["prompt_head"] == "diagnose prompt"
+    assert "T" in row["ts"]
+
+
+def test_diag_log_suppressed_for_own_runs(tmp_path, monkeypatch):
+    log_path = tmp_path / "inject_diag.jsonl"
+    monkeypatch.setattr(prompt_inject, "DIAG_LOG", log_path)
+    monkeypatch.setenv("CHA0SBRAIN_RUNNING", "1")
+
+    out = _run({"prompt": "ollama tool parsing problem",
+                "cwd": "/home/user/example-agent", "session_id": "s-analyse"})
+
+    assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
+    assert not log_path.exists()
+
+
+def test_diag_log_failure_still_emits_valid_empty_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(prompt_inject, "DIAG_LOG", tmp_path)
+    monkeypatch.setattr(prompt_inject, "injection_enabled", lambda: False)
+
+    out = _run({"prompt": "diag probe", "cwd": "/tmp", "session_id": "diag-broken"})
+
+    assert json.loads(out)["hookSpecificOutput"] == {
+        "hookEventName": "UserPromptSubmit",
+        "additionalContext": "",
+    }

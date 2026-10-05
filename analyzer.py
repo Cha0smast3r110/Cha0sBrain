@@ -75,6 +75,18 @@ def build_analyzer_prompt(session_data: dict, existing_tags: dict, existing_wing
     return "\n".join(parts)
 
 
+def _normalize_analyzer_topics(result: list) -> list:
+    """Keep analyzer response backward-compatible while exposing S1 card fields."""
+    card_fields = ("lesson", "trigger", "trigger_terms", "evidence", "derivable")
+    normalized = []
+    for topic in result:
+        if isinstance(topic, dict):
+            for field in card_fields:
+                topic.setdefault(field, None)
+        normalized.append(topic)
+    return normalized
+
+
 def parse_analyzer_response(response_text: str) -> list:
     """Parse the JSON response from the analyzer Haiku call."""
     text = response_text.strip()
@@ -86,7 +98,7 @@ def parse_analyzer_response(response_text: str) -> list:
             # Claude CLI JSON envelope: {"result": "...text content..."}
             text = envelope["result"].strip()
         elif isinstance(envelope, list):
-            return envelope
+            return _normalize_analyzer_topics(envelope)
     except (json.JSONDecodeError, TypeError):
         pass
 
@@ -103,7 +115,7 @@ def parse_analyzer_response(response_text: str) -> list:
     try:
         result = json.loads(text)
         if isinstance(result, list):
-            return result
+            return _normalize_analyzer_topics(result)
         return []
     except json.JSONDecodeError:
         logger.error(f"Failed to parse analyzer response as JSON: {text[:200]}")
@@ -319,7 +331,12 @@ ANALYZER_SCHEMA = json.dumps({
             "related": {"type": "array", "items": {"type": "string"}},
             "relevant_conversation": {"type": "array", "items": {"type": "integer"}},
             "relevant_tool_calls": {"type": "array", "items": {"type": "integer"}},
-            "summary": {"type": "string", "description": "2-3 Saetze Zusammenfassung"}
+            "summary": {"type": "string", "description": "Kernaussage in einem Satz"},
+            "lesson": {"type": ["string", "null"]},
+            "trigger": {"type": ["string", "null"]},
+            "trigger_terms": {"type": ["array", "null"], "items": {"type": "string"}},
+            "evidence": {"type": ["string", "null"]},
+            "derivable": {"type": ["boolean", "null"]}
         }
     }
 })

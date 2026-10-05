@@ -17,7 +17,7 @@ Wing (thematischer Fluegel): Ordne jedes Topic einem thematischen Fluegel zu.
 
 DEINE ANTWORT MUSS EXAKT SO AUSSEHEN (nur das JSON-Array, nichts anderes):
 
-[{"title":"Deutscher Titel","slug":"english-kebab-slug","project":"Projektname","wing":"netzwerk","type":"anleitung","tags":["tag1"],"difficulty":"intermediate","keep":"timeless","related":["KonzeptName"],"relevant_conversation":[0,1],"relevant_tool_calls":[0],"summary":"Was passiert ist"}]
+[{"title":"Deutscher Titel","slug":"english-kebab-slug","project":"Projektname","wing":"netzwerk","type":"anleitung","tags":["tag1"],"difficulty":"intermediate","keep":"timeless","related":["KonzeptName"],"relevant_conversation":[0,1],"relevant_tool_calls":[0],"summary":"Kernaussage in einem Satz","lesson":"Wenn <Situation/Symptom>, dann liegt es an <Ursache>; Fix: <konkreter Schritt>.","trigger":"Wann diese Lektion relevant ist","trigger_terms":["spezifischer-begriff","fehlermeldung","dienstname"],"evidence":"Commit, Datei:Zeile oder Fehlermeldung","derivable":false}]
 
 Regeln:
 - relevant_conversation = Indizes der Nachrichten die zum Thema gehoeren
@@ -26,9 +26,13 @@ Regeln:
 - Slugs: englisch, kebab-case, max 50 Zeichen
 - Titel: deutsch
 - Related: PascalCase Wiki-Link-Namen
+- lesson = EIN Satz, max 220 Zeichen, Muster "Wenn <Situation/Symptom>, dann liegt es an <Ursache>; Fix: <konkreter Schritt>." Konkrete Namen, Pfade, Werte, Befehle behalten.
+- lesson = null, wenn die Erkenntnis aus dem Code, dem git-Log oder dem Allgemeinwissen eines Sprachmodells ableitbar ist, oder wenn nur berichtet wird, was erledigt wurde ("K-12 implementiert", "Skill ausgeführt"). derivable=true in diesem Fall.
+- trigger_terms = 3 bis 8 spezifische Begriffe, an denen man die Situation erkennt (Tool-Namen, Fehlermeldungs-Fragmente, Dienst-Namen). VERBOTEN: allgemeine Wörter wie testing, api, server, workflow, tool, code, script, config, fix.
+- evidence = woran die Lektion belegt ist (Commit, Datei:Zeile, Fehlermeldung), max 200 Zeichen.
 - keep = "timeless" oder "volatile":
   - timeless = verallgemeinerbares Wissen, das Maxim in einem Jahr noch nuetzt: How-To, geloester Bug mit Root-Cause, Architektur-Entscheidung, Recherche/Vergleich.
   - volatile = einmaliges Tagesgeschaeft ohne Wiederverwendungswert: reiner Status "X erledigt", einmalige manuelle Ausfuehrung ohne neue Erkenntnis, triviale Wiederholung von bereits Dokumentiertem.
-  - Im Zweifel timeless (lieber behalten als verlieren).
+  - Im Zweifel volatile. Ein fehlender Eintrag kostet weniger als ein Eintrag, der als Rauschen in jede Session injiziert wird.
 - Session ohne technisches Wissen → []
 - Ignoriere System-Nachrichten und Permission-Checks

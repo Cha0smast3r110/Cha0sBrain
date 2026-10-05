@@ -101,3 +101,32 @@ class TestTimelessGate:
 
         assert [topic["slug"] for topic in out] == ["keep", "legacy"]
         assert "Filtered volatile topic: Tagesstatus raus (volatile)" in caplog.text
+
+
+
+def test_parse_analyzer_response_passes_card_fields_and_defaults_missing_to_none():
+    response = json.dumps([
+        {
+            "title": "Mit Karte", "slug": "with-card", "project": "P", "wing": "devtools",
+            "type": "troubleshooting", "tags": ["redis"], "difficulty": "intermediate",
+            "summary": "Kernaussage in einem Satz", "lesson": "Wenn X, dann Y; Fix: Z.",
+            "trigger": "Bei X", "trigger_terms": ["redis-url", "queued-worker", "worker-log"],
+            "evidence": "commit abc123", "derivable": False,
+        },
+        {
+            "title": "Ohne Karte", "slug": "without-card", "project": "P", "wing": "devtools",
+            "type": "anleitung", "tags": [], "difficulty": "beginner", "summary": "Nur Status",
+        },
+    ])
+
+    result = parse_analyzer_response(response)
+
+    assert result[0]["lesson"] == "Wenn X, dann Y; Fix: Z."
+    assert result[0]["trigger_terms"] == ["redis-url", "queued-worker", "worker-log"]
+    assert result[0]["derivable"] is False
+    assert result[1]["lesson"] is None
+    assert result[1]["trigger"] is None
+    assert result[1]["trigger_terms"] is None
+    assert result[1]["evidence"] is None
+    assert result[1]["derivable"] is None
+

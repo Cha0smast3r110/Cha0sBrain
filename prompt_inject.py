@@ -142,6 +142,12 @@ def _emit(stdout, ctx: str) -> None:
 def main(stdin=None, stdout=None) -> int:
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
+    # Eigene Analyse-Aufrufe (analyzer.call_claude setzt die Variable) bekommen
+    # nichts: sonst landen Lessons im Analyse-Prompt und je Lauf eine
+    # Phantom-Begleitdatei ohne Transkript.
+    if os.environ.get("CHA0SBRAIN_RUNNING"):
+        _emit(stdout, "")
+        return 0
     try:
         raw = stdin.read() or ""
         try:

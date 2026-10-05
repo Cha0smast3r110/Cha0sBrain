@@ -58,3 +58,22 @@ def test_broken_payload_never_raises(monkeypatch, tmp_path):
     out = io.StringIO()
     assert prompt_inject.main(io.StringIO("not json"), out) == 0
     assert json.loads(out.getvalue())["hookSpecificOutput"]["additionalContext"] == ""
+
+
+def test_eigene_analyse_aufrufe_bekommen_nichts(tmp_path, monkeypatch):
+    # brain.py ruft fuer die Analyse `claude -p` auf, das loest diesen Hook
+    # erneut aus. Ohne Sperre landeten Vault-Lessons im Analyse-Prompt
+    # (Rueckkopplung in den Vault) und je Lauf eine Phantom-Begleitdatei.
+    idx = {"ollama-tooling": ["devtools/ollama-client"]}
+    (tmp_path / "_tag_index.json").write_text(json.dumps(idx), encoding="utf-8")
+    dt = tmp_path / "devtools"; dt.mkdir()
+    (dt / "ollama-client.md").write_text(
+        "---\nproject: example-agent\ndate: 2026-06-01\n"
+        "description: Ollama tool parsing fix\n---\n# Ollama Client\n", encoding="utf-8")
+    monkeypatch.setattr(prompt_inject, "_resolve_vault", lambda: str(tmp_path))
+    monkeypatch.setattr(prompt_inject, "HOME_CLAUDE", tmp_path)
+    monkeypatch.setenv("CHA0SBRAIN_RUNNING", "1")
+    out = _run({"prompt": "ollama tool parsing problem",
+                "cwd": "/home/user/example-agent", "session_id": "s-analyse"})
+    assert json.loads(out)["hookSpecificOutput"]["additionalContext"] == ""
+    assert not list(tmp_path.glob(".cha0sbrain-*s-analyse*"))

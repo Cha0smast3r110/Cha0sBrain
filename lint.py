@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -23,6 +25,14 @@ class LintReport:
     fixed: int = 0
     quarantined: int = 0
     warnings: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class StaleReport:
+    checked: int = 0
+    stale: int = 0
+    changed: int = 0
+    reasons: Counter[str] = field(default_factory=Counter)
 
 
 def auto_fix_preamble(content: str) -> tuple[str, bool]:
@@ -264,7 +274,6 @@ def _cli_show_warnings(warnings_path: Path) -> int:
     if not warnings_path.exists():
         print(f"No warnings log at {warnings_path}")
         return 0
-    from collections import Counter
     counts: Counter = Counter()
     for line in warnings_path.read_text(encoding="utf-8").splitlines():
         try:
@@ -277,6 +286,172 @@ def _cli_show_warnings(warnings_path: Path) -> int:
     return 0
 
 
+_PATH_RE = re.compile(r"(?:~/|/home/)[^\s`\"'<>)\],;]+")
+_UNIT_RE = re.compile(r"\b[\w@.-]+\.(?:service|timer)\b")
+
+
+def _split_frontmatter_body(content: str) -> tuple[dict, str] | None:
+    if not content.startswith("---"):
+        return None
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None
+    try:
+        fm = yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    return fm, parts[2]
+
+
+def _normalize_reference_path(raw: str) -> str:
+    ref = raw.rstrip(".,:;!?)]]}")
+    ref = re.sub(r":\d+(?::\d+)?$", "", ref)
+    return ref
+
+
+def _extract_paths(text: str) -> list[str]:
+    seen: set[str] = set()
+    refs: list[str] = []
+    for match in _PATH_RE.finditer(text or ""):
+        ref = _normalize_reference_path(match.group(0))
+        if ref and ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
+def _extract_units(text: str) -> list[str]:
+    seen: set[str] = set()
+    refs: list[str] = []
+    for match in _UNIT_RE.finditer(text or ""):
+        ref = match.group(0)
+        if ref not in seen:
+            seen.add(ref)
+            refs.append(ref)
+    return refs
+
+
+def _path_exists(ref: str) -> bool:
+    try:
+        return Path(ref).expanduser().exists()
+    except OSError:
+        return False
+
+
+def _load_systemd_units() -> set[str] | None:
+    units: set[str] = set()
+    saw_success = False
+    for cmd in (
+        ["systemctl", "--user", "list-unit-files", "--no-legend"],
+        ["systemctl", "list-unit-files", "--no-legend"],
+    ):
+        try:
+            proc = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode != 0:
+            continue
+        saw_success = True
+        for line in proc.stdout.splitlines():
+            first = line.split(None, 1)[0] if line.split(None, 1) else ""
+            if first.endswith((".service", ".timer")):
+                units.add(first)
+    return units if saw_success else None
+
+
+def _first_missing_strong_ref(fm: dict, units: set[str] | None) -> str | None:
+    strong_text = "\n".join(str(fm.get(key, "")) for key in ("lesson", "evidence"))
+    for ref in _extract_paths(strong_text):
+        if not _path_exists(ref):
+            return ref
+    if units is not None:
+        for unit in _extract_units(strong_text):
+            if unit not in units:
+                return unit
+    return None
+
+
+def _first_missing_body_majority(body: str) -> str | None:
+    paths = _extract_paths(body)
+    if len(paths) < 2:
+        return None
+    missing = [ref for ref in paths if not _path_exists(ref)]
+    if len(missing) / len(paths) > 0.5:
+        return missing[0]
+    return None
+
+
+def _render_frontmatter(fm: dict, body: str) -> str:
+    return (
+        "---\n"
+        + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False)
+        + "---"
+        + body
+    )
+
+
+def _apply_stale_fields(path: Path, fm: dict, body: str, reason: str | None) -> bool:
+    changed = False
+    if reason:
+        if fm.get("stale") is not True or fm.get("stale_reason") != reason:
+            fm["stale"] = True
+            fm["stale_reason"] = reason
+            changed = True
+    else:
+        if "stale" in fm or "stale_reason" in fm:
+            fm.pop("stale", None)
+            fm.pop("stale_reason", None)
+            changed = True
+    if changed:
+        path.write_text(_render_frontmatter(fm, body), encoding="utf-8")
+    return changed
+
+
+def lint_stale(vault_root: Path, *, apply: bool = False) -> StaleReport:
+    """Mark valid lesson cards stale when referenced paths/units disappeared."""
+    units = _load_systemd_units()
+    report = StaleReport()
+    for md_file in _iter_entries(vault_root):
+        try:
+            content = md_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        split = _split_frontmatter_body(content)
+        if split is None:
+            continue
+        fm, body = split
+        if not stylecheck.card_is_valid(fm):
+            continue
+        report.checked += 1
+        reason = _first_missing_strong_ref(fm, units)
+        if reason is None:
+            reason = _first_missing_body_majority(body)
+        if reason:
+            report.stale += 1
+            report.reasons[reason] += 1
+        if apply and _apply_stale_fields(md_file, fm, body, reason):
+            report.changed += 1
+    return report
+
+
+def _cli_show_stale_report(report: StaleReport) -> None:
+    print(f"Checked: {report.checked}  Stale: {report.stale}  Changed: {report.changed}")
+    if not report.reasons:
+        print("Top reasons: none")
+        return
+    print("Top reasons:")
+    for reason, count in report.reasons.most_common(20):
+        print(f"{count:5d}  {reason}")
+
+
 def main() -> int:
     import argparse
     parser = argparse.ArgumentParser(description="Vault linter")
@@ -284,6 +459,10 @@ def main() -> int:
                         help="Full scan, ignore state")
     parser.add_argument("--show-warnings", action="store_true",
                         help="Aggregate warnings log by rule")
+    parser.add_argument("--stale", action="store_true",
+                        help="Report stale lesson cards")
+    parser.add_argument("--apply", action="store_true",
+                        help="With --stale, update stale/stale_reason frontmatter")
     parser.add_argument("--vault", default="vault", help="Path to vault")
     parser.add_argument("--logs", default="logs", help="Path to logs dir")
     args = parser.parse_args()
@@ -297,6 +476,11 @@ def main() -> int:
 
     if args.show_warnings:
         return _cli_show_warnings(warnings_path)
+
+    if args.stale:
+        report = lint_stale(vault, apply=args.apply)
+        _cli_show_stale_report(report)
+        return 0
 
     if args.full:
         report = lint_full(vault, warnings_path=warnings_path)

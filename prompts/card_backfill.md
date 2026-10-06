@@ -11,7 +11,7 @@ Regeln:
 - diary = nur Bericht, was gemacht wurde ("K-12 implementiert", "Skill ausgeführt"); keine Karte.
 - outdated = verweist erkennbar auf Abgeschafftes oder nicht mehr gültige Pfade/Dienste; keine Karte.
 - duplicate = der Eintrag wirkt wie ein Duplikat ohne eigene neue Lektion; keine Karte.
-- lesson = EIN Satz, max 220 Zeichen, Muster "Wenn <Situation/Symptom>, dann liegt es an <Ursache>; Fix: <konkreter Schritt>." Konkrete Namen, Pfade, Werte, Befehle behalten.
+- lesson = EIN Satz, max 320 Zeichen, Muster "Wenn <Situation/Symptom>, dann liegt es an <Ursache>; Fix: <konkreter Schritt>." Konkrete Namen, Pfade, Werte, Befehle behalten.
 - lesson = null, wenn die Erkenntnis aus dem Code, dem git-Log oder dem Allgemeinwissen eines Sprachmodells ableitbar ist, oder wenn nur berichtet wird, was erledigt wurde ("K-12 implementiert", "Skill ausgeführt"). derivable=true in diesem Fall.
 - trigger_terms = 3 bis 8 spezifische Begriffe, an denen man die Situation erkennt (Tool-Namen, Fehlermeldungs-Fragmente, Dienst-Namen). VERBOTEN: allgemeine Wörter wie testing, api, server, workflow, tool, code, script, config, fix.
 - evidence = woran die Lektion belegt ist (Commit, Datei:Zeile, Fehlermeldung), max 200 Zeichen.

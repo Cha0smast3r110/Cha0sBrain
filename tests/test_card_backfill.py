@@ -95,3 +95,4 @@ def test_card_backfill_resumes_orders_by_injection_and_validates(tmp_path, monke
     assert "# High" in calls[0]
     assert "# Low" in calls[1]
     assert len(calls[0]) < 5000  # body window is capped, not the full 4k+ body plus prompt
+    assert "max 320 Zeichen" in card_backfill.PROMPT_PATH.read_text(encoding="utf-8")

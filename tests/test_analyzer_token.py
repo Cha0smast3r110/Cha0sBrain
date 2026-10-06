@@ -42,3 +42,27 @@ def test_empty_token_value_is_ignored(tmp_path, monkeypatch):
     f.write_text("CLAUDE_CODE_OAUTH_TOKEN=\n", encoding="utf-8")
     monkeypatch.setenv("CHA0SBRAIN_OAUTH_TOKEN_FILE", str(f))
     assert analyzer._load_inference_token_env() == {}
+
+
+def test_call_claude_laedt_keinen_globalen_unterbau(monkeypatch):
+    # Ohne diese Flags laedt jeder Analyse-Aufruf globale CLAUDE.md, Skills,
+    # Hooks und MCP-Server: gemessen 2026-10-06 rund 32k Kontext-Tokens und
+    # 11-84 s statt ~0 Tokens und 3,6 s pro Aufruf.
+    import json, subprocess
+    seen = {}
+
+    class R:
+        returncode = 0
+        stdout = json.dumps({"result": "[]", "usage": {}, "total_cost_usd": 0})
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    analyzer.call_claude("sys", "user", "haiku")
+    cmd = seen["cmd"]
+    assert "--strict-mcp-config" in cmd
+    i = cmd.index("--setting-sources")
+    assert cmd[i + 1] == ""

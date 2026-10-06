@@ -96,3 +96,21 @@ def test_card_backfill_resumes_orders_by_injection_and_validates(tmp_path, monke
     assert "# Low" in calls[1]
     assert len(calls[0]) < 5000  # body window is capped, not the full 4k+ body plus prompt
     assert "max 320 Zeichen" in card_backfill.PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def test_fehlerhafte_antwort_wird_error_nicht_archivkandidat(tmp_path, monkeypatch):
+    # Ein kaputter Aufruf darf einen Eintrag nicht still als "diary" (=Archiv-
+    # Kandidat) einstufen.
+    import card_backfill as cb
+    rec = cb._validated_card({"verdict": "quatsch"})[0]
+    assert rec["verdict"] == "error"
+    rec2 = cb._validated_card({})[0]
+    assert rec2["verdict"] == "error"
+
+
+def test_backfill_schaltet_thinking_ab(monkeypatch):
+    import card_backfill as cb
+    monkeypatch.delenv("MAX_THINKING_TOKENS", raising=False)
+    cb._disable_thinking()
+    import os
+    assert os.environ["MAX_THINKING_TOKENS"] == "0"

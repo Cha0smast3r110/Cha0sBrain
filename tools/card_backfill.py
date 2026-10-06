@@ -8,6 +8,7 @@ S2.4 applies accepted cards later after Maxim's explicit go.
 from __future__ import annotations
 
 import argparse
+import os
 import csv
 import json
 import re
@@ -150,9 +151,11 @@ def _normalize_terms(value: Any) -> list[str]:
 
 
 def _validated_card(parsed: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
-    verdict = str(parsed.get("verdict") or "diary").strip().lower()
+    # Unlesbares Urteil = "error", nie "diary": sonst wird ein kaputter Aufruf
+    # still zum Archiv-Kandidaten.
+    verdict = str(parsed.get("verdict") or "error").strip().lower()
     if verdict not in VALID_VERDICTS:
-        verdict = "diary"
+        verdict = "error"
     record: dict[str, Any] = {
         "verdict": verdict,
         "lesson": _as_str_or_none(parsed.get("lesson")),
@@ -213,7 +216,7 @@ def run_backfill(*, vault_path: Path | str | None = None, report_path: Path = RE
         user_prompt = _entry_prompt(vault, ref)
         if user_prompt is None:
             missing += 1
-            record = {"ref": ref, "verdict": "outdated", "lesson": None, "trigger": None,
+            record = {"ref": ref, "verdict": "missing", "lesson": None, "trigger": None,
                       "trigger_terms": [], "evidence": None, "reason": "entry missing"}
             _append_record(cards_path, record)
             existing_refs.add(ref)
@@ -230,7 +233,7 @@ def run_backfill(*, vault_path: Path | str | None = None, report_path: Path = RE
             parsed = _extract_json_object(raw)
             error_text = "parse_error" if parsed is None else ""
         if parsed is None:
-            record = {"ref": ref, "verdict": "diary", "lesson": None, "trigger": None,
+            record = {"ref": ref, "verdict": "error", "lesson": None, "trigger": None,
                       "trigger_terms": [], "evidence": None, "reason": error_text[:100]}
         else:
             record, validation_error = _validated_card(parsed)
@@ -258,7 +261,15 @@ def run_backfill(*, vault_path: Path | str | None = None, report_path: Path = RE
     }
 
 
+def _disable_thinking() -> None:
+    """Extended Thinking aus: gemessen 2026-10-06 1.500-3.300 statt ~150
+    Output-Tokens und 17 statt 1,4 s API-Zeit je Eintrag, bei 17/18 gleichem
+    lesson-Urteil. Gilt nur fuer diesen Batch, nicht fuer brain.py."""
+    os.environ["MAX_THINKING_TOKENS"] = "0"
+
+
 def main() -> int:
+    _disable_thinking()
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--vault", type=Path, default=Path(vaultlib.load_config()))
     ap.add_argument("--report", type=Path, default=REPORT_PATH)

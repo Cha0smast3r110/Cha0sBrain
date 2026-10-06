@@ -241,6 +241,11 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
         "--system-prompt", system_prompt,
         "--no-session-persistence",
         "--tools", "",
+        # Keinen globalen Unterbau laden (CLAUDE.md, Skills, Hooks, MCP-Server):
+        # gemessen 2026-10-06 ~32k Kontext-Tokens und 11-84 s pro Aufruf, mit
+        # diesen Flags ~0 Tokens und 3,6 s. Auth laeuft weiter ueber das Env-Token.
+        "--strict-mcp-config",
+        "--setting-sources", "",
     ]
 
     # Immer die JSON-Huelle anfordern: sie traegt usage und total_cost_usd.

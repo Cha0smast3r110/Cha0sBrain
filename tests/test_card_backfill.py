@@ -108,6 +108,43 @@ def test_fehlerhafte_antwort_wird_error_nicht_archivkandidat(tmp_path, monkeypat
     assert rec2["verdict"] == "error"
 
 
+def test_validated_handgriff_preserves_system_aufgabe():
+    record, error = card_backfill._validated_card(
+        {"verdict": "handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "reason": "x"}
+    )
+    assert record["verdict"] == "handgriff"
+    assert record["system"] == "beispiel-crm"
+    assert record["aufgabe"] == "Benutzer anlegen"
+    assert record["lesson"] is None
+    assert error is None
+
+
+def test_validated_handgriff_without_aufgabe_is_error():
+    record, error = card_backfill._validated_card({"verdict": "handgriff", "reason": "x"})
+    assert record["verdict"] == "error"
+    assert record["system"] is None
+    assert record["aufgabe"] is None
+    assert record["reason"] == "handgriff ohne aufgabe"
+    assert error is None
+
+
+def test_validated_non_handgriff_clears_system_aufgabe():
+    for verdict in ("lesson", "diary"):
+        payload = {"verdict": verdict, "system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "reason": "x"}
+        if verdict == "lesson":
+            payload.update(
+                {
+                    "lesson": "Wenn der Worker nach Redis-Timeout hängen bleibt, dann blockiert die Queue; Fix: Worker neu starten.",
+                    "trigger": "Worker hängt nach Redis-Timeout",
+                    "trigger_terms": ["redis-timeout", "worker-freeze", "queue-drain"],
+                    "evidence": "commit abc123",
+                }
+            )
+        record, _error = card_backfill._validated_card(payload)
+        assert record["system"] is None
+        assert record["aufgabe"] is None
+
+
 def test_backfill_schaltet_thinking_ab(monkeypatch):
     import card_backfill as cb
     monkeypatch.delenv("MAX_THINKING_TOKENS", raising=False)

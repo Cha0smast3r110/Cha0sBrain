@@ -29,7 +29,7 @@ PROMPT_PATH = ROOT / "prompts" / "card_backfill.md"
 REPORT_PATH = ROOT / "docs" / "vault-triage" / "report.csv"
 CARDS_PATH = ROOT / "docs" / "vault-triage" / "cards.jsonl"
 BODY_WINDOW = 3000
-VALID_VERDICTS = {"lesson", "generic", "diary", "outdated", "duplicate"}
+VALID_VERDICTS = {"lesson", "generic", "diary", "outdated", "duplicate", "handgriff"}
 
 
 def _load_existing_refs(cards_path: Path) -> set[str]:
@@ -156,13 +156,24 @@ def _validated_card(parsed: dict[str, Any]) -> tuple[dict[str, Any], str | None]
     verdict = str(parsed.get("verdict") or "error").strip().lower()
     if verdict not in VALID_VERDICTS:
         verdict = "error"
+    system = _as_str_or_none(parsed.get("system")) if verdict == "handgriff" else None
+    aufgabe = _as_str_or_none(parsed.get("aufgabe")) if verdict == "handgriff" else None
+    if verdict == "handgriff" and not aufgabe:
+        verdict = "error"
+        system = None
+        aufgabe = None
+        reason = "handgriff ohne aufgabe"
+    else:
+        reason = (_as_str_or_none(parsed.get("reason")) or "")[:100]
     record: dict[str, Any] = {
         "verdict": verdict,
         "lesson": _as_str_or_none(parsed.get("lesson")),
         "trigger": _as_str_or_none(parsed.get("trigger")),
         "trigger_terms": _normalize_terms(parsed.get("trigger_terms")),
         "evidence": _as_str_or_none(parsed.get("evidence")),
-        "reason": (_as_str_or_none(parsed.get("reason")) or "")[:100],
+        "reason": reason,
+        "system": system,
+        "aufgabe": aufgabe,
     }
     if verdict != "lesson":
         record.update({"lesson": None, "trigger": None, "trigger_terms": [], "evidence": None})
@@ -217,7 +228,8 @@ def run_backfill(*, vault_path: Path | str | None = None, report_path: Path = RE
         if user_prompt is None:
             missing += 1
             record = {"ref": ref, "verdict": "missing", "lesson": None, "trigger": None,
-                      "trigger_terms": [], "evidence": None, "reason": "entry missing"}
+                      "trigger_terms": [], "evidence": None, "reason": "entry missing",
+                      "system": None, "aufgabe": None}
             _append_record(cards_path, record)
             existing_refs.add(ref)
             processed += 1
@@ -234,7 +246,8 @@ def run_backfill(*, vault_path: Path | str | None = None, report_path: Path = RE
             error_text = "parse_error" if parsed is None else ""
         if parsed is None:
             record = {"ref": ref, "verdict": "error", "lesson": None, "trigger": None,
-                      "trigger_terms": [], "evidence": None, "reason": error_text[:100]}
+                      "trigger_terms": [], "evidence": None, "reason": error_text[:100],
+                      "system": None, "aufgabe": None}
         else:
             record, validation_error = _validated_card(parsed)
             if validation_error:

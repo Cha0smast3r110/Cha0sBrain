@@ -162,8 +162,7 @@ def _process_checked_section(title: str, body: str, material: str) -> tuple[str,
         else:
             removed.append(_snippet(point))
 
-    if title == "Schritte":
-        kept = _renumber_steps(kept)
+    kept = _renumber_steps(kept)
     steps_left = sum(1 for point in kept if point.lstrip().startswith(tuple(f"{i}." for i in range(1, 1000)))) if title == "Schritte" else 0
     return _normalize_kept_body(kept), total, belegt, removed, steps_left
 

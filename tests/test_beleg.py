@@ -181,3 +181,26 @@ Freitext bleibt hier exakt.
 Gib System und Fehlermeldung mit.
 """
     assert "<!-- beleg" not in result.markdown
+
+
+def test_neunummerierung_auch_in_pruefung_und_stolperfallen():
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Schritte
+
+1. Klicke auf Team > Members > Invite.
+<!-- beleg: "Klicke auf Team > Members > Invite." -->
+
+## So prüfst du, ob es geklappt hat
+
+1. Erfunden.
+<!-- beleg: "nicht im Material vorhanden" -->
+2. Prüfe danach, ob neu@example.com in der Mitgliederliste steht.
+<!-- beleg: "Prüfe danach, ob neu@example.com in der Mitgliederliste steht." -->
+"""
+
+    result = beleg.apply(md, MATERIAL)
+
+    assert "1. Prüfe danach" in result.markdown
+    assert "2. Prüfe danach" not in result.markdown
+    assert result.steps_left == 1

@@ -297,3 +297,58 @@ def test_find_secret_ignores_quoted_paths():
     assert h.find_secret("TO" + "KEN=\" /root/beispiel/.functions-secrets\"") is None
     assert h.find_secret("pass" + "word: \"~/geheim/datei.txt\"") is None
     assert h.find_secret("pass" + "word: \"Hunter2024!\"") is not None
+
+
+# --- S8.2: fresh replaces prueft/tags ----------------------------------------
+
+def test_merge_frontmatter_fresh_false_keeps_old_prueft_and_tags():
+    old = {
+        "status": "bestätigt",
+        "bestaetigt_am": "2026-10-06",
+        "aufgabe": "Benutzer anlegen",
+        "quellen": ["session aaaa1111"],
+        "auch_gesucht_als": ["alter begriff"],
+        "prueft": ["alt-a", "alt-b"],
+        "tags": ["alt"],
+    }
+    topic = {"project": "example-app", "aufgabe": "Benutzer anlegen", "bestaetigt": False,
+             "summary": "s", "prueft": ["neu"], "tags": ["neu"]}
+
+    fm = h.merge_frontmatter(old, topic, "bbbb2222-1", "2026-10-08", fresh=False)
+
+    assert fm["prueft"] == ["alt-a", "alt-b", "neu"]
+    assert fm["tags"] == ["alt", "neu"]
+
+
+def test_merge_frontmatter_fresh_replaces_prueft_and_tags_but_keeps_origin():
+    old = {
+        "status": "bestätigt",
+        "bestaetigt_am": "2026-10-06",
+        "aufgabe": "Benutzer anlegen",
+        "quellen": ["session aaaa1111"],
+        "auch_gesucht_als": ["alter begriff"],
+        "prueft": ["alt-a", "alt-b"],
+        "tags": ["alt"],
+    }
+    topic = {"project": "example-app", "aufgabe": "Benutzer anlegen", "bestaetigt": False,
+             "summary": "s", "prueft": ["neu"], "tags": ["neu"]}
+
+    fm = h.merge_frontmatter(old, topic, "bbbb2222-1", "2026-10-08", fresh=True)
+
+    assert fm["prueft"] == ["neu"]
+    assert fm["tags"] == ["neu"]
+    assert fm["quellen"] == ["session aaaa1111", "session bbbb2222"]
+    assert fm["auch_gesucht_als"] == ["alter begriff", "benutzer anlegen"]
+    assert fm["status"] == "bestätigt"
+    assert fm["bestaetigt_am"] == "2026-10-06"
+
+
+def test_merge_frontmatter_fresh_without_topic_prueft_becomes_empty():
+    old = {"aufgabe": "Benutzer anlegen", "prueft": ["alt-a"], "tags": ["alt"]}
+    topic = {"project": "example-app", "aufgabe": "Benutzer anlegen", "bestaetigt": False,
+             "summary": "s", "tags": ["neu"]}
+
+    fm = h.merge_frontmatter(old, topic, "bbbb2222-1", "2026-10-08", fresh=True)
+
+    assert fm["prueft"] == []
+    assert fm["tags"] == ["neu"]

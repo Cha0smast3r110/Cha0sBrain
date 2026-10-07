@@ -756,7 +756,7 @@ def write_entries(
 
                 beleg_result = beleg.apply(markdown_content, handgriff_material)
                 markdown_content = beleg_result.markdown
-                fm = handgriff.merge_frontmatter(old_fm, topic, session_id, date)
+                fm = handgriff.merge_frontmatter(old_fm, topic, session_id, date, fresh=fresh_handgriff)
                 fm["belegt"] = f"{beleg_result.belegt}/{beleg_result.total}"
                 frontmatter = handgriff.render_frontmatter(fm)
                 pending_beleg = {

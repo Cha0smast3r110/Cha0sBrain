@@ -665,3 +665,24 @@ def test_beleg_quote_can_come_from_tool_output(vault, logs_dir, monkeypatch):
 
     assert result.written == [vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"]
     assert result.beleg and result.beleg[0]["belegt"] > 0
+
+
+
+def test_writer_fresh_handgriff_replaces_old_prueft(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body())
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+
+    writer.write_entries([_topic(prueft=["alt-a", "alt-b"], tags=["alt"], bestaetigt=True)], _session(), str(vault), "aaaa1111-1", "2026-10-07", "haiku")
+    page = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+
+    writer.write_entries([_topic(prueft=["neu"], tags=["neu"], bestaetigt=False)], _session(), str(vault), "bbbb2222-1", "2026-10-08", "haiku", fresh_handgriff=True)
+
+    parsed = _fm(page)
+    assert parsed["prueft"] == ["neu"]
+    assert parsed["tags"] == ["neu"]
+    assert parsed["quellen"] == ["session aaaa1111", "session bbbb2222"]
+    assert parsed["status"] == "bestätigt"

@@ -306,12 +306,15 @@ def _union(*values: Any, lower: bool = False, max_items: int | None = None) -> l
     return out
 
 
-def merge_frontmatter(old: dict | None, topic: dict, session_id: str, date: str) -> dict:
+def merge_frontmatter(old: dict | None, topic: dict, session_id: str, date: str, fresh: bool = False) -> dict:
     """Merge existing typed frontmatter with a handgriff topic."""
     old = old or {}
     topic = topic or {}
     bestaetigt = bool(topic.get("bestaetigt"))
     old_status = old.get("status")
+    topic_tags = sanitize_tags(topic.get("tags") or [])
+    tags = _union(topic_tags) if fresh else _union(old.get("tags"), topic_tags)
+    prueft = _union(topic.get("prueft")) if fresh else _union(old.get("prueft"), topic.get("prueft"))
 
     fm: dict[str, Any] = {
         "type": "handgriff",
@@ -322,10 +325,10 @@ def merge_frontmatter(old: dict | None, topic: dict, session_id: str, date: str)
         "date": date,
         "session_id": session_id,
         "difficulty": topic.get("difficulty") or old.get("difficulty") or "beginner",
-        "tags": _union(old.get("tags"), sanitize_tags(topic.get("tags") or [])),
+        "tags": tags,
         "auch_gesucht_als": _union(old.get("auch_gesucht_als"), topic.get("aufgabe"), topic.get("auch_gesucht_als"), lower=True, max_items=15),
         "quellen": _union(old.get("quellen"), f"session {str(session_id)[:8]}"),
-        "prueft": _union(old.get("prueft"), topic.get("prueft")),
+        "prueft": prueft,
         "description": " ".join(str(topic.get("summary") or "").split())[:140],
     }
 

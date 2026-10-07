@@ -817,3 +817,26 @@ def test_handgriff_material_shrinks_old_assistant_prose_before_cutting_tool_outp
     assert "→ Ausgabe: OUT00-" + ("R" * 294) + "… [gekürzt]" in material
     assert "OUT19-" + ("R" * 2000) in material
     assert "OLD-0-" + ("B" * 5000) not in material
+
+
+def test_handgriff_material_keeps_tool_outputs_when_budget_is_unreachable():
+    """Sprengen schon geschützte Nachrichten das Budget, bringt Ausgaben-Kürzen nichts und vernichtet nur Belege."""
+    import writer
+
+    conversation = [{"role": "user", "content": "USER-" + ("U" * 30000)}]
+    for idx in range(10):
+        conversation.append({"role": "assistant", "content": f"LAST10-{idx}"})
+    session = {
+        "conversation": conversation,
+        "tool_calls": [
+            {"tool": "Bash", "file": f"cmd-{idx}", "summary": f"command: cmd-{idx}", "result": f"OUT{idx:02d}-" + ("R" * 2000)}
+            for idx in range(20)
+        ],
+        "git_changes": {},
+    }
+
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0], relevant_tool_calls=[0]), session, max_chars=20000)
+
+    assert "USER-" + ("U" * 30000) in material
+    assert "→ Ausgabe: OUT00-" + ("R" * 294) + "… [gekürzt]" in material
+    assert "OUT19-" + ("R" * 2000) in material

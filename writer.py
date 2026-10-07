@@ -447,7 +447,16 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
             return material
 
     # Last resort: shrink all tool outputs further. Outputs are evidence for beleg.py,
-    # so they only go below 300 chars once old assistant prose is already gone.
+    # so they only go below 300 chars once old assistant prose is already gone, and
+    # only if that can reach the budget at all (protected messages may exceed it alone).
+    saved_results = [str(tool_record.get("result") or "") for tool_record in tool_records]
+    for tool_record in tool_records:
+        tool_record["result"] = ""
+    reachable = len(render()) <= max_chars
+    for tool_record, saved in zip(tool_records, saved_results):
+        tool_record["result"] = saved
+    if not reachable:
+        return render()
     for limit in (300, 100, 0):
         shrunk = shrink_tool_results(limit, include_recent=True)
         if shrunk is not None:

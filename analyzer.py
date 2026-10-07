@@ -296,7 +296,7 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
             capture_output=True,
             text=True,
             encoding="utf-8",
-            timeout=300,
+            timeout=600,
             cwd=neutral_cwd,
             shell=(os.name == "nt"),  # shell=True needed on Windows for .cmd files
             # Inject the inference-only setup-token (if configured) so this call
@@ -309,7 +309,7 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
         logger.error(f"Claude CLI not found (tried: {claude_cmd}); skipping analysis")
         return ""
     except subprocess.TimeoutExpired:
-        logger.error("Claude CLI timed out after 300s; skipping analysis")
+        logger.error("Claude CLI timed out after 600s; skipping analysis")
         return ""
     if result.returncode != 0:
         logger.error(f"Claude CLI error: {result.stderr[:500]}")

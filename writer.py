@@ -242,10 +242,10 @@ def build_frontmatter(topic: dict, session_id: str, date: str) -> str:
         f"tags: [{tags_str}]",
         f"wing: {topic['wing']}",
         f"type: {topic['type']}",
-        f"project: {topic['project']}",
+        f"project: {topic.get('project') or ''}",
         f"date: {date}",
         f"session_id: {session_id}",
-        f"difficulty: {topic['difficulty']}",
+        f"difficulty: {topic.get('difficulty') or 'beginner'}",
         f"description: {description_yaml}",
     ]
     if lesson:

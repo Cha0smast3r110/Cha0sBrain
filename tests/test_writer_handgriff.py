@@ -573,3 +573,23 @@ def test_writer_fuzzy_topic_does_not_take_page_of_exact_topic(vault, logs_dir, m
 
     names = [str(p).rsplit("/", 1)[-1] for p in result.written]
     assert len(names) == len(set(names)) == 2, names
+
+
+def test_writer_quarantine_survives_topic_without_project(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(
+        writer,
+        "call_claude",
+        lambda system, user, model: _valid_handgriff_body(body_extra="\npass" + "word: geheim123456\n"),
+    )
+    topic = _topic()
+    topic.pop("project", None)
+    topic.pop("difficulty", None)
+
+    result = writer.write_entries([topic], _session(), str(vault), "s1", "2026-10-08", "haiku")
+
+    assert result.quarantined

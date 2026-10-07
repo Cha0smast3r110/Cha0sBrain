@@ -1,6 +1,9 @@
 import yaml
 
 
+EVIDENCE = "belegte Details zur Aufgabe."
+
+
 def _valid_handgriff_body(title="Beispiel CRM: Benutzer anlegen", body_extra=""):
     body = f"# {title}\n\n"
     for section in [
@@ -12,7 +15,18 @@ def _valid_handgriff_body(title="Beispiel CRM: Benutzer anlegen", body_extra="")
         "Rückgängig machen",
         "Wenn du nicht weiterkommst",
     ]:
-        body += f"## {section}\n\n" + ("belegte Details zur Aufgabe. " * 2) + "\n\n"
+        body += f"## {section}\n\n"
+        if section == "Schritte":
+            body += (
+                "1. belegte Details zur Aufgabe.\n"
+                "Warum: belegte Details zur Aufgabe.\n"
+                f"<!-- beleg: \"{EVIDENCE}\" -->"
+            )
+        else:
+            body += "belegte Details zur Aufgabe. " * 2
+            if section in {"Wo / was du brauchst", "So prüfst du, ob es geklappt hat", "Stolperfallen", "Rückgängig machen"}:
+                body += f"\n<!-- beleg: \"{EVIDENCE}\" -->"
+        body += "\n\n"
     return body + body_extra
 
 
@@ -31,7 +45,7 @@ def _topic(**overrides):
         "bestaetigt": False,
         "auch_gesucht_als": ["user anlegen"],
         "prueft": [],
-        "relevant_conversation": [],
+        "relevant_conversation": [0],
         "relevant_tool_calls": [],
     }
     topic.update(overrides)
@@ -39,7 +53,7 @@ def _topic(**overrides):
 
 
 def _session():
-    return {"conversation": [], "tool_calls": [], "git_changes": {}}
+    return {"conversation": [{"role": "user", "content": EVIDENCE}], "tool_calls": [], "git_changes": {}}
 
 
 def _fm(path):
@@ -275,11 +289,136 @@ def test_handgriff_retry_resends_material(vault, logs_dir, monkeypatch):
 
     def fake(system, user, model):
         prompts.append(user)
-        return "kaputt ohne abschnitte" if len(prompts) == 1 else _valid_handgriff_body()
+        return (
+            "# Beispiel CRM: Benutzer anlegen\n\n"
+            "## Schritte\n\n"
+            "1. belegte Details zur Aufgabe.\n"
+            "Warum: belegte Details zur Aufgabe.\n"
+            f"<!-- beleg: \"{EVIDENCE}\" -->"
+        ) if len(prompts) == 1 else _valid_handgriff_body()
 
     monkeypatch.setattr(writer, "call_claude", fake)
     monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
-    session = {"conversation": [{"role": "user", "content": "MATERIAL-MARKER schritt eins"}],
+    session = {"conversation": [{"role": "user", "content": f"MATERIAL-MARKER schritt eins {EVIDENCE}"}],
                "tool_calls": [], "git_changes": {}}
     writer.write_entries([_topic(relevant_conversation=[0])], session, str(vault), "s1", "2026-10-08", "haiku")
     assert len(prompts) == 2 and "MATERIAL-MARKER" in prompts[1]
+
+
+
+def _body_with_three_steps_one_unbelegt():
+    return """# Beispiel CRM: Benutzer anlegen
+
+## Wann brauchst du das
+
+Wenn du einen neuen Platzhalter-Account anlegen willst.
+
+## Wo / was du brauchst
+
+Noch nicht belegt.
+
+## Schritte
+
+1. Klicke auf Team > Members > Invite.
+Warum: Das öffnet die Einladung.
+<!-- beleg: "Klicke auf Team > Members > Invite." -->
+2. Öffne Start scan.
+Warum: Dieser Schritt ist erfunden.
+<!-- beleg: "Klicke im Crawl-Menü auf Start scan." -->
+3. Trage neu@example.com ein.
+Warum: Damit die Einladung ankommt.
+<!-- beleg: "Trage neu@example.com ein." -->
+
+## So prüfst du, ob es geklappt hat
+
+Noch nicht belegt.
+
+## Stolperfallen
+
+Noch nicht belegt.
+
+## Rückgängig machen
+
+Noch nicht belegt.
+
+## Wenn du nicht weiterkommst
+
+Gib System und Fehlermeldung mit.
+"""
+
+
+def _session_for_beleg_steps():
+    return {"conversation": [{"role": "user", "content": "Klicke auf Team > Members > Invite. Trage neu@example.com ein."}],
+            "tool_calls": [], "git_changes": {}}
+
+
+def test_handgriff_writer_filters_unbelegte_punkte_and_frontmatter(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _body_with_three_steps_one_unbelegt())
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+
+    result = writer.write_entries([_topic()], _session_for_beleg_steps(), str(vault), "s1", "2026-10-08", "haiku")
+
+    page = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    content = page.read_text(encoding="utf-8")
+    parsed = _fm(page)
+    assert result.written == [page]
+    assert parsed["belegt"].startswith("2/")
+    assert result.beleg and result.beleg[0]["belegt"] == 2
+    assert "Start scan" not in content
+    assert "1. Klicke auf Team > Members > Invite." in content
+    assert "2. Trage neu@example.com ein." in content
+    assert "<!-- beleg" not in content
+
+
+def test_handgriff_writer_quarantines_when_no_beleg_steps_left(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body().replace('<!-- beleg: "belegte Details zur Aufgabe." -->', ''))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+
+    result = writer.write_entries([_topic()], _session(), str(vault), "s1", "2026-10-08", "haiku")
+
+    assert result.written == []
+    assert result.quarantined == ["benutzer-anlegen"]
+    assert (vault / "_quarantine" / "benutzer-anlegen.md").exists()
+    assert not (vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md").exists()
+
+
+def test_anleitung_writer_does_not_call_beleg_apply(vault, logs_dir, monkeypatch):
+    import beleg
+    import writer
+
+    topic = {
+        "type": "anleitung",
+        "title": "CLI nutzen",
+        "slug": "cli-nutzen",
+        "wing": "devtools",
+        "project": "example-app",
+        "tags": ["cli"],
+        "difficulty": "beginner",
+        "summary": "Eine Anleitung",
+        "relevant_conversation": [0],
+        "relevant_tool_calls": [],
+    }
+    session = {"conversation": [{"role": "user", "content": "MATERIAL"}], "tool_calls": [], "git_changes": {}}
+
+    def fail_apply(*_args, **_kwargs):
+        raise AssertionError("beleg.apply darf für anleitung nicht laufen")
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(beleg, "apply", fail_apply)
+    monkeypatch.setattr(
+        writer,
+        "call_claude",
+        lambda _system, _user, _model: "# CLI nutzen\n\n## Worum geht es?\n" + ("x" * 220) + "\n\n## Problemstellung\n" + ("x" * 220) + "\n\n## Hintergrundwissen\n" + ("x" * 220) + "\n\n## Lösung\n" + ("x" * 220) + "\n\n## Cheatsheet\n" + ("x" * 220),
+    )
+
+    result = writer.write_entries([topic], session, str(vault), "s1", "2026-10-08", "haiku", emit_docs_solutions=False)
+
+    assert result.written == [vault / "devtools" / "cli-nutzen.md"]

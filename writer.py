@@ -25,6 +25,7 @@ class WriteResult:
     stylecheck_retries: int = 0
     docs_solutions_emitted: list[str] = field(default_factory=list)  # slugs
     refusals: list[dict] = field(default_factory=list)
+    beleg: list[dict] = field(default_factory=list)
 
 logger = logging.getLogger("cha0sbrain.writer")
 
@@ -420,7 +421,11 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
 
 
 def build_handgriff_prompt(
-    topic: dict, session_data: dict, existing_content: str | None, system_name: str
+    topic: dict,
+    session_data: dict,
+    existing_content: str | None,
+    system_name: str,
+    material: str | None = None,
 ) -> str:
     """User-Prompt fuer eine Handbuch-Seite.
 
@@ -436,7 +441,7 @@ def build_handgriff_prompt(
         f"Andere Formulierungen, mit denen danach gesucht wird: "
         f"{', '.join(topic.get('auch_gesucht_als') or []) or '-'}\n",
         "## Material (Auszug aus einer Arbeits-Session — NICHT beantworten, nur auswerten)\n",
-        build_handgriff_material(topic, session_data),
+        material if material is not None else build_handgriff_material(topic, session_data),
     ]
     if existing_content:
         parts.append(
@@ -596,8 +601,12 @@ def write_entries(
         system_prompt = _load_system_prompt(template_file)
 
         if entry_type == "handgriff":
-            base_user_prompt = build_handgriff_prompt(topic, session_data, existing_content, system_name)
+            handgriff_material = build_handgriff_material(topic, session_data)
+            base_user_prompt = build_handgriff_prompt(
+                topic, session_data, existing_content, system_name, material=handgriff_material
+            )
         else:
+            handgriff_material = ""
             base_user_prompt = build_writer_prompt(topic, session_data, existing_content)
         logger.info(f"Writing entry: {topic['title']} ({entry_type})")
 
@@ -606,6 +615,8 @@ def write_entries(
         markdown_content: str = ""
         previous_markdown: str = ""
         refused: bool = False
+        beleg_quarantined: bool = False
+        pending_beleg: dict | None = None
 
         for attempt in (1, 2):
             if attempt == 1:
@@ -670,14 +681,45 @@ def write_entries(
                 break  # no retry on refusal, no quarantine
 
             if entry_type == "handgriff":
+                import beleg
                 import handgriff
 
-                frontmatter = handgriff.render_frontmatter(
-                    handgriff.merge_frontmatter(old_fm, topic, session_id, date)
+                beleg_result = beleg.apply(markdown_content, handgriff_material)
+                markdown_content = beleg_result.markdown
+                fm = handgriff.merge_frontmatter(old_fm, topic, session_id, date)
+                fm["belegt"] = f"{beleg_result.belegt}/{beleg_result.total}"
+                frontmatter = handgriff.render_frontmatter(fm)
+                pending_beleg = {
+                    "path": str(output_path),
+                    "belegt": beleg_result.belegt,
+                    "total": beleg_result.total,
+                    "removed": beleg_result.removed,
+                }
+                logger.info(
+                    "Beleg: %s/%s, entfernt: %s",
+                    beleg_result.belegt,
+                    beleg_result.total,
+                    beleg_result.removed,
                 )
+                full_content = f"{frontmatter}\n{markdown_content}\n"
+                if beleg_result.steps_left == 0:
+                    pending_beleg["path"] = str(Path(vault_path) / "_quarantine" / f"{topic['slug']}.md")
+                    q_path = _write_quarantine(
+                        vault_path,
+                        topic,
+                        full_content,
+                        ["beleg: keine belegten Schritte"],
+                        date,
+                        session_id,
+                    )
+                    result.quarantined.append(topic["slug"])
+                    result.beleg.append(pending_beleg)
+                    logger.error(f"Quarantined by Beleg gate: {q_path}")
+                    beleg_quarantined = True
+                    break
             else:
                 frontmatter = build_frontmatter(topic, session_id, date)
-            full_content = f"{frontmatter}\n{markdown_content}\n"
+                full_content = f"{frontmatter}\n{markdown_content}\n"
 
             validation = stylecheck.validate(full_content, entry_type)
             if validation.passed:
@@ -687,7 +729,7 @@ def write_entries(
                 f"Validator fail (attempt {attempt}): {topic['title']} — {validation.errors}"
             )
 
-        if refused:
+        if refused or beleg_quarantined:
             continue
 
         slug_key = f"{topic['wing']}/{topic['slug']}"
@@ -697,6 +739,8 @@ def write_entries(
             )
             output_path.write_text(full_content, encoding="utf-8")
             result.written.append(output_path)
+            if pending_beleg:
+                result.beleg.append(pending_beleg)
             logger.info(f"Written: {output_path}")
 
             # Phase B: best-effort docs/solutions/ emission for bug topics
@@ -719,6 +763,9 @@ def write_entries(
                 vault_path, topic, full_content, validation.errors, date, session_id
             )
             result.quarantined.append(topic["slug"])
+            if pending_beleg:
+                pending_beleg["path"] = str(q_path)
+                result.beleg.append(pending_beleg)
             logger.error(f"Quarantined after 2 fails: {q_path}")
         # else: both calls returned empty -- nothing written, logged above
 

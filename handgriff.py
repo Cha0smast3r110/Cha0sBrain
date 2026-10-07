@@ -201,6 +201,7 @@ def render_frontmatter(fm: dict) -> str:
         "quellen",
         "prueft",
         "description",
+        "belegt",
     ]
     lines = ["---"]
     for key in preferred + sorted(k for k in fm if k not in preferred):

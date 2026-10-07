@@ -21,7 +21,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from collector import parse_session, collect_git_changes, derive_project_id
+from collector import parse_session, collect_git_changes, derive_project_id, has_handgriff_signal
 import analyzer
 from analyzer import analyze_session
 from writer import write_entries
@@ -412,13 +412,14 @@ def process_session(
     # Code-edit gate: only learn from sessions that actually modified files.
     # Research / info-processing sessions (Read/Grep/WebFetch/Bash-only) produce
     # low-value "learnings" that bloat the vault and waste a Claude analyze call.
+    # Ausnahme: Anleitungen an Maxim und operative Handgriffe (Spec H1).
     # Skip them before the expensive analyze step.
     EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
     has_file_edit = any(
         tc.get("tool") in EDIT_TOOLS for tc in session_data["tool_calls"]
     )
-    if not has_file_edit:
-        logger.info("No file edits in session (research/info) - skipping")
+    if not has_file_edit and not has_handgriff_signal(session_data):
+        logger.info("No file edits and no how-to signal - skipping")
         # Mark processed so the backfill timer doesn't re-scan this edit-less
         # session every run (sessions are immutable; edit-less stays edit-less).
         mark_session_processed(session_id, session_data.get("project", "unknown"), 0)

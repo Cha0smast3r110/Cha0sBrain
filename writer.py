@@ -409,16 +409,32 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
     if len(material) <= max_chars:
         return material
 
+    def shrink_tool_results(limit: int, *, include_recent: bool) -> str | None:
+        for tool_record in tool_records:
+            if not include_recent and tool_record["idx"] >= recent_tool_start:
+                continue
+            result = str(tool_record.get("result") or "")
+            if len(result) > limit:
+                tool_record["result"] = result[:limit] + "… [gekürzt]"
+                current = render()
+                if len(current) <= max_chars:
+                    return current
+        return None
+
     # First shrink old tool outputs before the recent tenth to 300 chars.
-    for tool_record in tool_records:
-        if tool_record["idx"] >= recent_tool_start:
-            continue
-        result = str(tool_record.get("result") or "")
-        if len(result) > 300:
-            tool_record["result"] = result[:300] + "… [gekürzt]"
-            material = render()
-            if len(material) <= max_chars:
-                return material
+    shrunk = shrink_tool_results(300, include_recent=False)
+    if shrunk is not None:
+        return shrunk
+
+    # If tool output volume alone still blows the budget, progressively shrink
+    # all tool outputs. User messages and recent conversation remain untouched.
+    for limit in (300, 100, 0):
+        shrunk = shrink_tool_results(limit, include_recent=True)
+        if shrunk is not None:
+            return shrunk
+    material = render()
+    if len(material) <= max_chars:
+        return material
 
     # Then shrink old assistant messages to 1500 chars.
     for record in records:

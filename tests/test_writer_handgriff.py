@@ -767,3 +767,27 @@ def test_writer_same_system_session_match_wins_over_foreign(vault, logs_dir, mon
     result = writer.write_entries([_topic(system="beispiel-konsole", aufgabe="Kennzahl testen", title="Kennzahl testen", slug="kennzahl-testen")], _session(), str(vault), "abcd1234-2", "2026-10-08", "haiku")
 
     assert result.written == [vault / "handbuch" / "beispiel-konsole" / "kennzahl-pruefen.md"]
+
+
+
+def test_handgriff_material_many_tool_outputs_respects_max_chars_and_keeps_messages():
+    import writer
+
+    conversation = [{"role": "user", "content": "USER-FULL-" + ("U" * 1200)}]
+    for idx in range(10):
+        conversation.append({"role": "assistant", "content": f"LAST10-{idx}-" + ("B" * 200)})
+    session = {
+        "conversation": conversation,
+        "tool_calls": [
+            {"tool": "Bash", "file": f"cmd-{idx}", "summary": f"command: cmd-{idx}", "result": "R" * 5000}
+            for idx in range(300)
+        ],
+        "git_changes": {},
+    }
+
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0], relevant_tool_calls=[0]), session, max_chars=60000)
+
+    assert len(material) <= 60000
+    assert "USER-FULL-" + ("U" * 1200) in material
+    for idx in range(10):
+        assert f"LAST10-{idx}-" + ("B" * 200) in material

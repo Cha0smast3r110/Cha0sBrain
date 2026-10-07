@@ -18,7 +18,7 @@ POINT_RE = re.compile(r"^(?:\d+\.|-)\s+")
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 HEDGE_RE = re.compile(
     r"(?i)\b(vermutlich|wahrscheinlich|vermute|vielleicht|möglicherweise|moeglicherweise|eventuell|"
-    r"evtl\.|könnte|koennte|dürfte|duerfte|nehme an|ich glaube|scheint)\b"
+    r"könnte|koennte|dürfte|duerfte|nehme an|ich glaube|scheint)\b|\bevtl\."
 )
 
 

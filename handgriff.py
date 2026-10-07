@@ -22,8 +22,12 @@ _SECRET_PATTERNS = [
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)(passwor[dt]|secret|api[_-]?key|token)\s*[:=]\s*['\"]?([A-Za-z0-9_\-./+=~!@#$%^&*]{8,})"
+    r"(?i)(passwor[dt]|secret|api[_-]?key|token)\s*[:=]\s*"
+    r"(?:([\"'])(?P<quoted>[^\"'\n]{6,}?)\2|(?P<plain>[^\s\"'(),;]{6,}))"
 )
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+(?P<plain>[^\s\"'(),;]{16,})")
+# Code-Verweise statt Werte: Umgebungsvariablen, Attribute, Platzhalter
+_CODE_REF_PREFIXES = ("$", "<", "{", "%", "os.", "process.env", "self.", "this.", "env.", "config.", "settings.")
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 _ALLOWED_EXAMPLE_DOMAINS = {"example.com", "example.org", "beispiel.de"}
 _ROLE_EMAIL_LOCAL_PARTS = {
@@ -192,6 +196,34 @@ def _has_opposite_pair(new_tokens: set[str], old_tokens: set[str]) -> bool:
     return False
 
 
+_VERB_WORD_RE = re.compile(r"[A-Za-zÄÖÜäöüß]+")
+
+
+def _verbs(text: str) -> set[str]:
+    """Kleingeschriebene Infinitive einer Aufgabe ("Benutzer anlegen" -> {"anlegen"}).
+
+    Deutsche Nomen sind gross geschrieben, Verben in einer Aufgaben-Phrase klein; das trennt
+    "Kopieren" (Nomen) von "kopieren" (Handlung) ohne Woerterbuch.
+    """
+    out: set[str] = set()
+    for word in _VERB_WORD_RE.findall(str(text or "")):
+        token = slugify(word)
+        if (word[0].islower() and len(token) >= 5 and token.endswith(("en", "ern", "eln"))
+                and token not in _SESSION_STOPWORDS):
+            out.add(token)
+    return out
+
+
+def _verbs_compatible(new_verbs: set[str], old_verbs: set[str]) -> bool:
+    if not new_verbs or not old_verbs:
+        return True
+    return any(_tokens_equal_verb(a, b) for a in new_verbs for b in old_verbs)
+
+
+def _tokens_equal_verb(left: str, right: str) -> bool:
+    return left == right or (_VERB_EQUIV.get(left) is not None and _VERB_EQUIV.get(left) is _VERB_EQUIV.get(right))
+
+
 def _session_score(new_tokens: list[str], old_tokens: list[str]) -> int:
     return sum(1 for token in new_tokens if any(_tokens_similar(token, old) for old in old_tokens))
 
@@ -234,8 +266,10 @@ def find_session_page(
         old_tokens = _content_tokens(" ".join([old_aufgabe] + [str(a) for a in old_aliases]), system_slug)
         if _has_opposite_pair(set(new_tokens), set(old_tokens)):
             continue
+        if not _verbs_compatible(_verbs(aufgabe), _verbs(old_aufgabe)):
+            continue
         score = _session_score(new_tokens, old_tokens)
-        if score >= 2 or (score >= 1 and len(new_tokens) == 1):
+        if score >= 2:
             matches.append((score, str(path), path))
 
     if not matches:
@@ -347,20 +381,31 @@ def render_frontmatter(fm: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _is_code_or_placeholder(secret_value: str, needs_entropy: bool) -> bool:
+    folded = secret_value.casefold()
+    if folded.startswith(_CODE_REF_PREFIXES):
+        return True
+    if set(secret_value) <= {"*", "x", "X", "."}:
+        return True
+    if any(marker in folded for marker in ("example", "beispiel", "placeholder", "dein", "your")):
+        return True
+    # Token/Key ohne Ziffer und kurz ist fast immer Prosa ("token: optional");
+    # Passwoerter und Secrets werden dagegen auch als reine Woerter gemeldet.
+    return needs_entropy and not any(ch.isdigit() for ch in secret_value) and len(secret_value) < 20
+
+
 def find_secret(text: str) -> str | None:
     """Return a shortened first secret/email match or None."""
     value = str(text or "")
     best: tuple[int, str] | None = None
     for match in _SECRET_ASSIGNMENT_RE.finditer(value):
-        secret_value = match.group(2)
-        folded = secret_value.casefold()
-        if secret_value.startswith(("$", "<", "{", "%", "os.")):
+        secret_value = match.group("quoted") or match.group("plain") or ""
+        needs_entropy = match.group(1).casefold().startswith(("token", "api"))
+        if _is_code_or_placeholder(secret_value, needs_entropy):
             continue
-        if set(secret_value) <= {"*", "x", "X", "."}:
-            continue
-        if any(marker in folded for marker in ("example", "beispiel", "placeholder", "dein", "your")):
-            continue
-        if not any(ch.isdigit() for ch in secret_value) and len(secret_value) < 20:
+        best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
+    for match in _BEARER_RE.finditer(value):
+        if _is_code_or_placeholder(match.group("plain"), True):
             continue
         best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
     for pattern in _SECRET_PATTERNS:

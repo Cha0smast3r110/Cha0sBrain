@@ -199,7 +199,7 @@ def test_find_secret_ignores_code_placeholders_and_role_senders():
     assert h.find_secret("noreply" + "@beispiel-dienst.de") is None
     assert h.find_secret("support" + "@beispiel-dienst.de") is None
     assert h.find_secret("neu@example.com") is None
-    assert h.find_secret("pass" + "word: changeme_bitte") is None
+    assert h.find_secret("to" + "ken: nichtgesetzt") is None  # Token ohne Ziffer und kurz = Prosa
 
 
 def test_find_secret_allows_example_domain_variants():
@@ -238,3 +238,56 @@ def test_slugify_cuts_at_word_boundary():
     s = h.slugify("Zugriff auf Beispiel-Projekte via Remote-Verbindung dauerhaft einrichten")
     assert len(s) <= 60
     assert s == "zugriff-auf-beispiel-projekte-via-remote-verbindung"
+
+
+# --- S7 Nachbesserung nach Pruefrunde 1 ---
+
+def test_find_session_page_rejects_different_verbs(tmp_path):
+    cases = [
+        ("Benutzer Zugang einrichten", "Benutzer Zugang entfernen"),
+        ("Webhook Endpoint registrieren", "Webhook Endpoint entfernen"),
+        ("Benutzer Konto erstellen", "Benutzer Konto deaktivieren"),
+        ("Datei Export hochladen", "Datei Export herunterladen"),
+        ("Bot Token hinterlegen", "Bot Token rotieren"),
+        ("Domain Shop verbinden", "Domain Shop trennen"),
+    ]
+    for i, (old, new) in enumerate(cases):
+        root = tmp_path / str(i)
+        _handgriff_page(root, "beispiel-crm", old, "abcd1234")
+        assert h.find_session_page(str(root), "beispiel-crm", new, None, "abcd1234-1") is None, (old, new)
+
+
+def test_find_session_page_keeps_matching_same_verb_family(tmp_path):
+    cases = [
+        ("Kennzahl prüfen", "Kennzahl testen"),
+        ("AGB und Datenschutz hinterlegen", "AGB- und Datenschutz-URLs im Konto hinterlegen und Checkbox aktivieren"),
+        ("neuen Server konfigurieren und bestellen", "Neuen Server bestellen und SSH-Key einrichten"),
+        ("Sitemap neu einreichen", "Sitemap einreichen und Indexierung beantragen"),
+    ]
+    for i, (old, new) in enumerate(cases):
+        root = tmp_path / str(i)
+        page = _handgriff_page(root, "beispiel-crm", old, "abcd1234")
+        assert h.find_session_page(str(root), "beispiel-crm", new, None, "abcd1234-1") == page, (old, new)
+
+
+def test_find_session_page_single_word_title_needs_exact_single_word_page(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-crm", "Backup wiederherstellen", "abcd1234")
+    _handgriff_page(tmp_path, "beispiel-crm", "Backupplan anlegen", "abcd1234")
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Backup", None, "abcd1234-1") is None
+
+
+def test_find_secret_bearer_and_passphrases():
+    assert h.find_secret("Authorization: Be" + "arer abcdefghijklmnopqrstuvwxyz0123456789ABCD") is not None
+    assert h.find_secret("curl -H 'Authorization: Be" + "arer abcdefghijklmnop1234' https://x") is not None
+    for value in ("Sommerwind", "Geheim!", "correcthorsebattery", "hunter2", "Mü11erPass!", "'Hunter 2024'"):
+        assert h.find_secret("pass" + "word: " + value) is not None, value
+    assert h.find_secret("sec" + "ret: geheimeswort") is not None
+    assert h.find_secret("to" + "ken: abcädefgh123") is not None
+
+
+def test_find_secret_ignores_code_references():
+    assert h.find_secret("to" + "ken = input(\"Token: \").strip()") is None
+    assert h.find_secret("to" + "ken=process.env.BOT_TOKEN") is None
+    assert h.find_secret("sec" + "ret = self._secret_value1") is None
+    assert h.find_secret("Authorization: Be" + "arer $TOKEN") is None
+    assert h.find_secret("Authorization: Be" + "arer <dein-token>") is None

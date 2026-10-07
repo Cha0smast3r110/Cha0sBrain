@@ -302,3 +302,10 @@ def test_hedge_regex_nutzt_wortgrenzen():
     result = beleg.apply(md, material)
 
     assert "Annahme:" not in result.markdown
+
+
+def test_hedge_re_matches_abbreviation_evtl():
+    import beleg
+
+    assert beleg.HEDGE_RE.search("evtl. liegt es am Cache")
+    assert not beleg.HEDGE_RE.search("Ventil prüfen")

@@ -549,3 +549,27 @@ def test_fresh_handgriff_omits_old_body_but_keeps_confirmed_status(vault, logs_d
 
     assert "ALTER BODY SATZ DARF NICHT INS PROMPT" not in prompts[-1]
     assert _fm(page)["status"] == "bestätigt"
+
+
+def test_writer_fuzzy_topic_does_not_take_page_of_exact_topic(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body("Beispiel CRM: Kennzahl prüfen"))
+
+    writer.write_entries(
+        [_topic(aufgabe="Kennzahl prüfen", title="Kennzahl prüfen", slug="kennzahl-pruefen")],
+        _session(), str(vault), "abcd1234-1", "2026-10-07", "haiku",
+    )
+    result = writer.write_entries(
+        [
+            _topic(aufgabe="Kennzahl testen", title="Kennzahl testen", slug="kennzahl-testen"),
+            _topic(aufgabe="Kennzahl prüfen", title="Kennzahl prüfen", slug="kennzahl-pruefen"),
+        ],
+        _session(), str(vault), "abcd1234-2", "2026-10-08", "haiku",
+    )
+
+    names = [str(p).rsplit("/", 1)[-1] for p in result.written]
+    assert len(names) == len(set(names)) == 2, names

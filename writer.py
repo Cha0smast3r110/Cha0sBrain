@@ -560,6 +560,20 @@ def write_entries(
     result = WriteResult()
     project_dir = session_data.get("project_dir", "")
     written_handgriff_paths: set[Path] = set()
+    # Seiten, die ein Topic dieses Aufrufs exakt trifft, darf kein anderes Topic per
+    # Session-Wiedererkennung belegen (sonst ueberschreibt das zweite das erste).
+    reserved_exact_paths: set[Path] = set()
+    if any(t.get("type") == "handgriff" for t in topics):
+        import handgriff
+
+        _registry = handgriff.load_registry(vault_path)
+        for t in topics:
+            if t.get("type") != "handgriff":
+                continue
+            _system = handgriff.resolve_system(str(t.get("system") or ""), str(t.get("project") or ""), _registry)
+            _exact = handgriff.find_existing_page(vault_path, _system, str(t.get("aufgabe") or ""))
+            if _exact is not None:
+                reserved_exact_paths.add(_exact)
 
     for topic in topics:
         entry_type = topic.get("type", "anleitung")
@@ -582,7 +596,7 @@ def write_entries(
                     requested_aufgabe,
                     topic.get("auch_gesucht_als"),
                     session_id,
-                    exclude=written_handgriff_paths,
+                    exclude=written_handgriff_paths | reserved_exact_paths,
                 )
                 if session_path is not None:
                     output_path = session_path

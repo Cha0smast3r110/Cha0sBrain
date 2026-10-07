@@ -382,7 +382,10 @@ def render_frontmatter(fm: dict) -> str:
 
 
 def _is_code_or_placeholder(secret_value: str, needs_entropy: bool) -> bool:
+    secret_value = secret_value.strip()
     folded = secret_value.casefold()
+    if secret_value.startswith(("/", "~/", "./")):
+        return True  # Dateipfad, kein Wert
     if folded.startswith(_CODE_REF_PREFIXES):
         return True
     if set(secret_value) <= {"*", "x", "X", "."}:

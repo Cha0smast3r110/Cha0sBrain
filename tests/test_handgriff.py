@@ -291,3 +291,9 @@ def test_find_secret_ignores_code_references():
     assert h.find_secret("sec" + "ret = self._secret_value1") is None
     assert h.find_secret("Authorization: Be" + "arer $TOKEN") is None
     assert h.find_secret("Authorization: Be" + "arer <dein-token>") is None
+
+
+def test_find_secret_ignores_quoted_paths():
+    assert h.find_secret("TO" + "KEN=\" /root/beispiel/.functions-secrets\"") is None
+    assert h.find_secret("pass" + "word: \"~/geheim/datei.txt\"") is None
+    assert h.find_secret("pass" + "word: \"Hunter2024!\"") is not None

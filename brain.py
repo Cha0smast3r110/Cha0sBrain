@@ -110,6 +110,8 @@ def load_existing_wings(vault_path: str) -> dict:
 
 
 PROCESSED_SESSIONS_FILE = LOG_DIR / "processed_sessions.json"
+IDLE_MINUTES = 20
+MIN_NEW_LINES = 20
 
 NEAR_DUPLICATE_THRESHOLD = 0.82  # Cosine; empirisch bestimmt (Audit 2026-08-29):
 # echte Near-Dupes >=0.82, thematisch verschiedene Einträge <=0.48. Symmetrischer
@@ -280,15 +282,64 @@ def load_processed_sessions() -> dict:
     return {}
 
 
-def mark_session_processed(session_id: str, project: str, entry_count: int) -> None:
-    """Append a session to the processed-sessions record."""
+def _count_lines(path: str) -> int:
+    """Return physical line count for a session JSONL file; 0 on I/O errors."""
+    try:
+        with open(path, "rb") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
+def processing_start(
+    session_id: str,
+    session_file: str,
+    processed: dict,
+    now: float,
+    *,
+    require_idle: bool,
+) -> int | None:
+    """Return start line for processing, or None if the session should wait/skip."""
+    if require_idle:
+        try:
+            if now - Path(session_file).stat().st_mtime < IDLE_MINUTES * 60:
+                return None
+        except OSError:
+            return None
+
+    if session_id not in processed:
+        return 0
+
+    record = processed.get(session_id) or {}
+    if "lines" not in record:
+        return None
+
+    try:
+        previous_lines = int(record.get("lines") or 0)
+    except (TypeError, ValueError):
+        return None
+    current_lines = _count_lines(session_file)
+    if current_lines - previous_lines >= MIN_NEW_LINES:
+        return previous_lines
+    return None
+
+
+def mark_session_processed(session_id: str, project: str, entry_count: int, lines: int | None = None) -> None:
+    """Append/update a session in the processed-sessions record."""
     LOG_DIR.mkdir(exist_ok=True)
     processed = load_processed_sessions()
-    processed[session_id] = {
+    old = processed.get(session_id) or {}
+    record = {
         "processed_at": datetime.now().isoformat(timespec="seconds"),
         "project": project,
-        "entries": entry_count,
+        "entries": int(old.get("entries") or 0) + entry_count,
+        "runs": int(old.get("runs") or 0) + 1,
     }
+    if lines is not None:
+        record["lines"] = lines
+    elif "lines" in old:
+        record["lines"] = old["lines"]
+    processed[session_id] = record
     PROCESSED_SESSIONS_FILE.write_text(
         json.dumps(processed, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -360,6 +411,7 @@ def process_session(
     config: dict,
     logger: logging.Logger,
     session_file: str | None = None,
+    force: bool = False,
 ) -> bool:
     """Run the full pipeline for one session. Shared by hook + backfill paths.
 
@@ -368,13 +420,6 @@ def process_session(
     can keep going.
     """
     processed = load_processed_sessions()
-    if session_id in processed:
-        logger.info(
-            f"Session {session_id} already processed at "
-            f"{processed[session_id].get('processed_at')} "
-            f"({processed[session_id].get('entries')} entries) - skipping"
-        )
-        return True
 
     logger.info(f"Processing session {session_id} from {cwd}")
 
@@ -391,7 +436,18 @@ def process_session(
         logger.error(f"Session file not found for {session_id}")
         return False
 
-    session_data = parse_session(session_file)
+    start = 0 if force else processing_start(
+        session_id,
+        session_file,
+        processed,
+        time.time(),
+        require_idle=False,
+    )
+    if start is None:
+        logger.info(f"Session {session_id} already processed / not grown - skipping")
+        return True
+
+    session_data = parse_session(session_file, start_line=start)
 
     git_changes = collect_git_changes(
         session_data["project_dir"],
@@ -407,6 +463,12 @@ def process_session(
 
     if not session_data["conversation"]:
         logger.info("Empty session, skipping")
+        mark_session_processed(
+            session_id,
+            session_data.get("project", "unknown"),
+            0,
+            lines=session_data.get("total_lines"),
+        )
         return False
 
     # Code-edit gate: only learn from sessions that actually modified files.
@@ -422,7 +484,12 @@ def process_session(
         logger.info("No file edits and no how-to signal - skipping")
         # Mark processed so the backfill timer doesn't re-scan this edit-less
         # session every run (sessions are immutable; edit-less stays edit-less).
-        mark_session_processed(session_id, session_data.get("project", "unknown"), 0)
+        mark_session_processed(
+            session_id,
+            session_data.get("project", "unknown"),
+            0,
+            lines=session_data.get("total_lines"),
+        )
         return False
 
     # 2. ANALYZE
@@ -433,6 +500,12 @@ def process_session(
 
     if not topics:
         logger.info("No topics found, skipping")
+        mark_session_processed(
+            session_id,
+            session_data.get("project", "unknown"),
+            0,
+            lines=session_data.get("total_lines"),
+        )
         return False
 
     required_keys = {"title", "slug", "project", "wing", "type"}
@@ -443,6 +516,12 @@ def process_session(
 
     if not topics:
         logger.info("No valid topics after filtering, skipping")
+        mark_session_processed(
+            session_id,
+            session_data.get("project", "unknown"),
+            0,
+            lines=session_data.get("total_lines"),
+        )
         return False
 
     logger.info(f"Found {len(topics)} topics: {[t['title'] for t in topics]}")
@@ -507,7 +586,12 @@ def process_session(
     # Mark processed BEFORE the final log line so a crash on the log call
     # still persists dedup state.
     project_name = topics[0].get("project", "unknown") if topics else "unknown"
-    mark_session_processed(session_id, project_name, len(write_result.written))
+    mark_session_processed(
+        session_id,
+        project_name,
+        len(write_result.written),
+        lines=session_data.get("total_lines"),
+    )
 
     logger.info(f"Done! Processed session {session_id}: {len(topics)} topics, {len(write_result.written)} entries written")
     return True
@@ -572,10 +656,14 @@ def run_backfill(since_days: int, config: dict, logger: logging.Logger) -> int:
     cleanup_stale_injected_dedup(logger)
     sessions = find_unprocessed_sessions(since_days)
     processed = load_processed_sessions()
-    pending = [(p, sid) for p, sid in sessions if sid not in processed]
+    now = time.time()
+    pending = [
+        (p, sid) for p, sid in sessions
+        if processing_start(sid, p, processed, now, require_idle=True) is not None
+    ]
     logger.info(
         f"Backfill: scanning last {since_days}d, "
-        f"{len(sessions)} candidates, {len(pending)} unprocessed"
+        f"{len(sessions)} candidates, {len(pending)} ready for processing"
     )
 
     written_count = 0
@@ -617,6 +705,10 @@ def main():
         "--since-days", type=int, default=7,
         help="Backfill only sessions modified in the last N days (default: 7)",
     )
+    parser.add_argument(
+        "--reprocess",
+        help="Process one JSONL session from line 0, ignoring processed_sessions state",
+    )
     args = parser.parse_args()
 
     # Anti-recursion: claude CLI calls we make would re-trigger SessionEnd hooks.
@@ -626,6 +718,18 @@ def main():
 
     config = load_config()
     logger = setup_logging(config.get("log_level", "INFO"))
+
+    if args.reprocess:
+        session_path = Path(args.reprocess)
+        process_session(
+            session_path.stem,
+            "",
+            config,
+            logger,
+            session_file=str(session_path),
+            force=True,
+        )
+        return
 
     if args.backfill:
         run_backfill(args.since_days, config, logger)

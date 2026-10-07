@@ -389,7 +389,8 @@ def filter_timeless_topics(topics: list) -> list:
         if not isinstance(topic, dict):
             kept.append(topic)
             continue
-        if str(topic.get("keep", "timeless")).strip().lower() == "volatile":
+        if (str(topic.get("keep", "timeless")).strip().lower() == "volatile"
+                and topic.get("type") != "handgriff"):  # Handgriffe sind wiederholbar, nie Tagesgeschaeft
             logger.info(f"Filtered volatile topic: {topic.get('title', '<untitled>')} (volatile)")
             continue
         if topic.get("type") == "research":

@@ -2,7 +2,7 @@ Du bist eine JSON-API. Du antwortest AUSSCHLIESSLICH mit einem JSON-Array. KEIN 
 
 Deine Aufgabe: Analysiere eine Claude Code Session und identifiziere die technischen Themen.
 
-Typ: anleitung (How-To, Feature, Config), troubleshooting (Debugging, Fixes), recherche (Evaluation, Vergleich, Fragen)
+Typ: handgriff (Schritte, die der User in einem seiner Systeme selbst ausführt, siehe unten — hat Vorrang), anleitung (How-To, Feature, Config), troubleshooting (Debugging, Fixes), recherche (Evaluation, Vergleich, Fragen)
 Schwierigkeit: beginner, intermediate, advanced
 
 Wing (thematischer Fluegel): Ordne jedes Topic einem thematischen Fluegel zu.
@@ -42,6 +42,14 @@ Regeln:
   "Wie mache ich X in <System>?" — z.B. Benutzer anlegen, Dienst neu starten, Domain umziehen.
 - Erzeuge einen Handgriff, wenn der User so eine Frage stellt ODER der Assistant ihm Schritte zum Selbermachen gibt
   ODER die Session einen wiederholbaren Betriebsvorgang ausführt. Auch ohne Datei-Edits, auch ohne Lektion.
+- "Eigenes System" heißt jedes Konto, jeder Dienst und jedes Gerät, das der User selbst bedient: eigene Apps und
+  Server genauso wie fremde Plattformen, auf denen er ein Konto hat (Zahlungsanbieter, Werbekonten, Hosting,
+  Mail-Anbieter, Community-Plattformen, Webmaster-Tools, Entwickler-Konsolen, eigene Laptops).
+- Fragt der User "wie mache ich", "wie kann ich", "wo finde ich", "was soll ich auswählen/eingeben" und der
+  Assistant antwortet mit Klickpfad, Menüschritten oder Befehlen zum Selbermachen, ist das IMMER ein Handgriff,
+  nie eine anleitung. Erklärungen ohne Schritte zum Nachmachen sind keine Handgriffe.
+- Handgriffe sind nie "volatile": auch eine einmal ausgeführte Klickfolge ist wiederholbar. keep = "timeless".
+- Ein Handgriff je Aufgabe. Eine Session kann mehrere Handgriffe enthalten; gib jeden einzeln aus.
 - system = das Produkt/der Dienst, dessen Daten oder Verhalten sich ändern, NICHT das Werkzeug, mit dem man es tut (Datenbank-Oberfläche, Terminal, Browser sind Werkzeuge). Steht ein passender Key unter "Bekannte Systeme", nimm GENAU diesen Key; sonst kebab-case.
 - aufgabe = Verb-Phrase in Maxims Worten, 2-6 Wörter, deutsch ("Vertriebler anlegen", nicht "User-Provisioning").
 - auch_gesucht_als = 3-8 andere Formulierungen, mit denen Maxim danach suchen würde, inklusive seiner Original-Frage.

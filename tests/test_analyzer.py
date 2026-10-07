@@ -239,3 +239,11 @@ def test_filter_gives_handgriff_without_title_a_title():
          "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}
     out = filter_timeless_topics([t])
     assert out and out[0]["title"] == "Benutzer anlegen"
+
+
+def test_filter_keeps_volatile_handgriff():
+    """Der Prompt laesst einmalige Ausfuehrungen als volatile markieren; Handgriffe
+    sind trotzdem wiederholbar und duerfen nicht still wegfallen."""
+    t = {"title": "Benutzer anlegen", "slug": "x", "project": "p", "wing": "w", "type": "handgriff",
+         "system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "keep": "volatile"}
+    assert [x["aufgabe"] for x in filter_timeless_topics([t])] == ["Benutzer anlegen"]

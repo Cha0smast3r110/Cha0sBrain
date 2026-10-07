@@ -31,17 +31,28 @@ def derive_project_name(cwd: str) -> str:
     return Path(cwd.replace("\\", "/")).name
 
 
-def parse_session(jsonl_path: str) -> dict:
-    """Parse a Claude Code JSONL session file into structured data."""
+def parse_session(jsonl_path: str, start_line: int = 0) -> dict:
+    """Parse a Claude Code JSONL session file into structured data.
+
+    start_line ist ein 0-basierter physischer Zeilen-Offset. Conversation vor
+    diesem Offset wird nur als prior_context (max. 3 Nachrichten) mitgegeben;
+    Tool-Calls vor dem Offset gelten als bereits verarbeitet und werden verworfen.
+    """
     conversation = []
+    prior_conv = []
     tool_calls = []
     session_id = None
     project_dir = None
     timestamp = None
+    fallback_project_dir = None
+    fallback_timestamp = None
+    total_lines = 0
+    start_line = max(0, int(start_line or 0))
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+        for idx, raw_line in enumerate(f):
+            total_lines = idx + 1
+            line = raw_line.strip()
             if not line:
                 continue
             try:
@@ -51,6 +62,8 @@ def parse_session(jsonl_path: str) -> dict:
                 continue
 
             entry_type = entry.get("type")
+            before_start = idx < start_line
+            target_conversation = prior_conv if before_start else conversation
 
             if not session_id:
                 session_id = entry.get("sessionId") or entry.get("message", {}).get("sessionId")
@@ -58,12 +71,16 @@ def parse_session(jsonl_path: str) -> dict:
             if entry_type == "user":
                 msg = entry.get("message", {})
                 content = msg.get("content", "")
-                if not project_dir:
+                if not fallback_project_dir:
+                    fallback_project_dir = entry.get("cwd", "")
+                if not fallback_timestamp:
+                    fallback_timestamp = entry.get("timestamp", "")
+                if not before_start and not project_dir:
                     project_dir = entry.get("cwd", "")
-                if not timestamp:
+                if not before_start and not timestamp:
                     timestamp = entry.get("timestamp", "")
                 if isinstance(content, str) and content.strip():
-                    conversation.append({"role": "user", "content": content})
+                    target_conversation.append({"role": "user", "content": content})
 
             elif entry_type == "assistant":
                 msg = entry.get("message", {})
@@ -74,7 +91,7 @@ def parse_session(jsonl_path: str) -> dict:
                         block_type = block.get("type")
                         if block_type == "text":
                             text_parts.append(block.get("text", ""))
-                        elif block_type == "tool_use":
+                        elif not before_start and block_type == "tool_use":
                             tool_name = block.get("name", "")
                             tool_input = block.get("input", {})
                             file_path = (
@@ -88,17 +105,21 @@ def parse_session(jsonl_path: str) -> dict:
                                 "summary": _summarize_input(tool_input),
                             })
                     if text_parts:
-                        conversation.append({"role": "assistant", "content": "\n".join(text_parts)})
+                        target_conversation.append({"role": "assistant", "content": "\n".join(text_parts)})
 
+    project_dir = project_dir or fallback_project_dir or ""
+    timestamp = timestamp or fallback_timestamp or ""
     project_name = derive_project_name(project_dir) if project_dir else "unknown"
 
     return {
         "session_id": session_id or "unknown",
         "project": project_name,
-        "project_dir": project_dir or "",
+        "project_dir": project_dir,
         "timestamp": timestamp or datetime.now().isoformat(),
         "conversation": conversation,
         "tool_calls": tool_calls,
+        "prior_context": prior_conv[-3:] if start_line else [],
+        "total_lines": total_lines,
     }
 
 

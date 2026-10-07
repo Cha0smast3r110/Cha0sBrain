@@ -136,3 +136,25 @@ def test_one_operative_call_is_not_enough():
 
 def test_empty_session_data_no_crash():
     assert has_handgriff_signal({}) is False
+
+
+def test_parse_session_from_offset(tmp_path):
+    p = tmp_path / "s.jsonl"
+    rows = [
+        {"type": "user", "sessionId": "s", "cwd": "/home/user/example-app", "timestamp": "2026-10-07T09:00:00", "message": {"content": "alte frage"}},
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": "alte antwort"}]}},
+        {"type": "user", "sessionId": "s", "cwd": "/home/user/example-app", "timestamp": "2026-10-07T11:00:00", "message": {"content": "neue frage"}},
+    ]
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    sd = parse_session(str(p), start_line=2)
+    assert [m["content"] for m in sd["conversation"]] == ["neue frage"]
+    assert [m["content"] for m in sd["prior_context"]] == ["alte frage", "alte antwort"]
+    assert sd["timestamp"] == "2026-10-07T11:00:00"
+    assert sd["total_lines"] == 3
+
+
+def test_parse_session_offset_beyond_end(tmp_path):
+    p = tmp_path / "s.jsonl"
+    p.write_text(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x", "timestamp": "t", "message": {"content": "a"}}) + "\n")
+    sd = parse_session(str(p), start_line=10)
+    assert sd["conversation"] == [] and sd["total_lines"] == 1

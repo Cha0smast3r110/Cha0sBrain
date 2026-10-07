@@ -17,6 +17,12 @@ def build_analyzer_prompt(session_data: dict, existing_tags: dict, existing_wing
 
     parts.append(f"## Session Info\n- Projekt: {session_data['project']}\n- Session-ID: {session_data['session_id']}\n")
 
+    if session_data.get("prior_context"):
+        parts.append("## Vorheriger Kontext (bereits verarbeitet, nur zum Verständnis, keine Topics daraus)\n")
+        for msg in session_data["prior_context"]:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            parts.append(f"**{role}:** {msg['content'][:600]}\n")
+
     # Existing wings for context
     if existing_wings:
         parts.append("## Existierende Wings (bevorzugt diese verwenden)\n")

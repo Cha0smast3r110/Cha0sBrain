@@ -25,6 +25,18 @@ class TestBuildAnalyzerPrompt:
         assert "Fix the bug" in prompt
         assert "I'll look into it" in prompt
 
+    def test_prompt_shows_prior_context_marked_as_processed(self):
+        sd = {
+            "project": "p",
+            "session_id": "s",
+            "conversation": [{"role": "user", "content": "neu"}],
+            "tool_calls": [],
+            "prior_context": [{"role": "user", "content": "wie lege ich X an?"}],
+        }
+        prompt = build_analyzer_prompt(sd, {}, {})
+        assert "## Vorheriger Kontext" in prompt and "wie lege ich X an?" in prompt
+        assert prompt.index("## Vorheriger Kontext") < prompt.index("## Conversation")
+
     def test_includes_git_changes(self):
         session_data = {
             "session_id": "test-123",

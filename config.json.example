@@ -4,5 +4,11 @@
   "log_level": "INFO",
   "push_vault_to_remote": true,
   "emit_docs_solutions": true,
-  "injection_holdout_rate": 0.0
+  "injection_holdout_rate": 0.0,
+  "secret_lint_allowed_emails": [
+    "nachrichten@example.com"
+  ],
+  "secret_lint_allowed_domains": [
+    "example.com"
+  ]
 }

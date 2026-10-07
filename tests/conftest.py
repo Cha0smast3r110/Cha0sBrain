@@ -57,3 +57,10 @@ def _injektion_unabhaengig_von_live_config(monkeypatch):
     import prompt_inject
     monkeypatch.setattr(prompt_inject, "injection_enabled", lambda: True)
     monkeypatch.delenv("CHA0SBRAIN_RUNNING", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _secret_lint_unabhaengig_von_live_config(monkeypatch, tmp_path):
+    """Die Absender-Ausnahmen aus der echten config.json duerfen keinen Test beeinflussen."""
+    import handgriff
+    monkeypatch.setattr(handgriff, "CONFIG_PATH", tmp_path / "keine-config.json")

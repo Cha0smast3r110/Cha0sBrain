@@ -28,6 +28,25 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 _BEARER_RE = re.compile(r"(?i)\bbearer\s+(?P<plain>[^\s\"'(),;]{16,})")
 # Code-Verweise statt Werte: Umgebungsvariablen, Attribute, Platzhalter
 _CODE_REF_PREFIXES = ("$", "<", "{", "%", "os.", "process.env", "self.", "this.", "env.", "config.", "settings.")
+CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+
+
+def _own_sender_allowlist() -> tuple[set[str], set[str]]:
+    """Eigene Absender aus config.json (gitignored): exakte Adressen und Domains inkl. Subdomains."""
+    try:
+        cfg = json.loads(Path(CONFIG_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set(), set()
+    if not isinstance(cfg, dict):
+        return set(), set()
+
+    def _lower_set(key: str) -> set[str]:
+        value = cfg.get(key) or []
+        return {str(v).strip().casefold() for v in value if str(v).strip()} if isinstance(value, list) else set()
+
+    return _lower_set("secret_lint_allowed_emails"), _lower_set("secret_lint_allowed_domains")
+
+
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 _ALLOWED_EXAMPLE_DOMAINS = {"example.com", "example.org", "beispiel.de"}
 _ROLE_EMAIL_LOCAL_PARTS = {
@@ -433,9 +452,15 @@ def find_secret(text: str) -> str | None:
         match = pattern.search(value)
         if match:
             best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
+    allowed_emails, allowed_domains = _own_sender_allowlist()
     for match in _EMAIL_RE.finditer(value):
         local = match.group(0).split("@", 1)[0].casefold()
         if local in _ROLE_EMAIL_LOCAL_PARTS:
+            continue
+        if match.group(0).casefold() in allowed_emails:
+            continue
+        email_domain = match.group(1).casefold()
+        if any(email_domain == d or email_domain.endswith("." + d) for d in allowed_domains):
             continue
         domain = match.group(1).lower()
         # Platzhalter-Domains inkl. Varianten (example.co als Tippfehler-Beispiel ist kein echter Kontakt)

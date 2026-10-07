@@ -381,3 +381,35 @@ def test_find_session_page_any_system_skips_broken_frontmatter(tmp_path):
     broken.write_text("kein frontmatter", encoding="utf-8")
 
     assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Sitemap neu einreichen", None, "abcd1234-99", any_system=True) is None
+
+
+def test_find_secret_respects_configured_own_senders(tmp_path, monkeypatch):
+    import json as _json
+    import handgriff
+
+    cfg = tmp_path / "config.json"
+    cfg.write_text(_json.dumps({
+        "secret_lint_allowed_emails": ["Nachrichten@Beispiel-Firma.de"],
+        "secret_lint_allowed_domains": ["eigene-firma.de"],
+    }), encoding="utf-8")
+    monkeypatch.setattr(handgriff, "CONFIG_PATH", cfg)
+
+    assert handgriff.find_secret("Absender: nachrichten@beispiel-firma.de") is None
+    assert handgriff.find_secret("Absender: vorname@eigene-firma.de") is None
+    assert handgriff.find_secret("Absender: vorname@mail.eigene-firma.de") is None
+    # Andere Adresse derselben Firma, fremde Domain mit gleichem Suffix: weiter gefunden
+    assert handgriff.find_secret("an andere@beispiel-firma.de") is not None
+    assert handgriff.find_secret("an max@nicht-eigene-firma.de") is not None
+    # Echte Secrets bleiben unberührt
+    assert handgriff.find_secret("password: Hunter2024!") is not None
+
+
+def test_find_secret_without_or_with_broken_config(tmp_path, monkeypatch):
+    import handgriff
+
+    monkeypatch.setattr(handgriff, "CONFIG_PATH", tmp_path / "fehlt.json")
+    assert handgriff.find_secret("an max@eigene-firma.de") is not None
+    broken = tmp_path / "config.json"
+    broken.write_text("{kaputt", encoding="utf-8")
+    monkeypatch.setattr(handgriff, "CONFIG_PATH", broken)
+    assert handgriff.find_secret("an max@eigene-firma.de") is not None

@@ -42,7 +42,7 @@ Regeln:
   "Wie mache ich X in <System>?" — z.B. Benutzer anlegen, Dienst neu starten, Domain umziehen.
 - Erzeuge einen Handgriff, wenn der User so eine Frage stellt ODER der Assistant ihm Schritte zum Selbermachen gibt
   ODER die Session einen wiederholbaren Betriebsvorgang ausführt. Auch ohne Datei-Edits, auch ohne Lektion.
-- system = das Produkt/der Dienst, in dem die Aufgabe passiert (nicht das Werkzeug): kebab-case.
+- system = das Produkt/der Dienst, dessen Daten oder Verhalten sich ändern, NICHT das Werkzeug, mit dem man es tut (Datenbank-Oberfläche, Terminal, Browser sind Werkzeuge). Steht ein passender Key unter "Bekannte Systeme", nimm GENAU diesen Key; sonst kebab-case.
 - aufgabe = Verb-Phrase in Maxims Worten, 2-6 Wörter, deutsch ("Vertriebler anlegen", nicht "User-Provisioning").
 - auch_gesucht_als = 3-8 andere Formulierungen, mit denen Maxim danach suchen würde, inklusive seiner Original-Frage.
 - bestaetigt = true NUR wenn der User die Ausführung bestätigt ("hat geklappt", "läuft", "passt"); sonst false.

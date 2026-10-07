@@ -61,7 +61,8 @@ def resolve_system(raw: str, project: str, registry: dict) -> str:
     project_l = project_s.casefold()
     for key, rec in (registry or {}).items():
         aliases = rec.get("aliases") if isinstance(rec, dict) else []
-        if any(raw_l == str(alias).strip().casefold() for alias in aliases or []):
+        if any(raw_l == str(alias).strip().casefold() or (raw_slug and raw_slug == slugify(str(alias)))
+               for alias in aliases or []):
             return key
     for key, rec in (registry or {}).items():
         projects = rec.get("projekte") if isinstance(rec, dict) else []
@@ -231,7 +232,8 @@ def find_secret(text: str) -> str | None:
             best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
     for match in _EMAIL_RE.finditer(value):
         domain = match.group(1).lower()
-        if domain not in _ALLOWED_EXAMPLE_DOMAINS:
+        # Platzhalter-Domains inkl. Varianten (example.co als Tippfehler-Beispiel ist kein echter Kontakt)
+        if domain not in _ALLOWED_EXAMPLE_DOMAINS and not domain.startswith(("example.", "beispiel.")):
             best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
             break
     if best is None:

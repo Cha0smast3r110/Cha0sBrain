@@ -216,3 +216,11 @@ def test_karte_mit_300_zeichen_bleibt_gueltig():
           "trigger_terms": ["redis-url", "worker-queued", "celery"], "evidence": "commit abc",
           "card_version": 1, "seen_sessions": 1}
     assert stylecheck.card_is_valid(fm)
+
+
+def test_prompt_lists_known_systems_for_handgriffe():
+    sd = {"project": "p", "session_id": "s", "conversation": [{"role": "user", "content": "x"}], "tool_calls": []}
+    systems = {"beispiel-crm": {"name": "Beispiel CRM", "aliases": ["kundenportal", "db studio"], "projekte": []}}
+    prompt = build_analyzer_prompt(sd, {}, {}, systems=systems)
+    assert "## Bekannte Systeme" in prompt and "beispiel-crm" in prompt and "db studio" in prompt
+    assert "## Bekannte Systeme" not in build_analyzer_prompt(sd, {}, {})

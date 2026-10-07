@@ -510,7 +510,9 @@ def process_session(
     logger.info("Step 2: Analyzing session topics...")
     existing_tags = load_existing_tags(vault_path)
     existing_wings = load_existing_wings(vault_path)
-    topics = analyze_session(session_data, existing_tags, existing_wings, model)
+    import handgriff
+    systems = handgriff.load_registry(vault_path)
+    topics = analyze_session(session_data, existing_tags, existing_wings, model, systems=systems)
 
     if not topics:
         logger.info("No topics found, skipping")

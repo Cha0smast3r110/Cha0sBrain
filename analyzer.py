@@ -11,7 +11,9 @@ logger = logging.getLogger("cha0sbrain.analyzer")
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def build_analyzer_prompt(session_data: dict, existing_tags: dict, existing_wings: dict) -> str:
+def build_analyzer_prompt(
+    session_data: dict, existing_tags: dict, existing_wings: dict, systems: dict | None = None
+) -> str:
     """Build the user prompt for the analyzer Haiku call."""
     parts = []
 
@@ -22,6 +24,16 @@ def build_analyzer_prompt(session_data: dict, existing_tags: dict, existing_wing
         for msg in session_data["prior_context"]:
             role = "User" if msg["role"] == "user" else "Assistant"
             parts.append(f"**{role}:** {msg['content'][:600]}\n")
+
+    # Bekannte Systeme fuer Handgriffe: ohne diese Liste nennt Haiku das Werkzeug
+    # ("supabase-studio") statt des Produkts (Echtlauf 2026-10-07).
+    if systems:
+        parts.append("## Bekannte Systeme (für Handgriffe: system = einer dieser Keys, wenn die Aufgabe dazu gehört)\n")
+        for key, rec in sorted(systems.items()):
+            rec = rec if isinstance(rec, dict) else {}
+            aliases = ", ".join(str(a) for a in rec.get("aliases") or [])
+            parts.append(f"- **{key}** ({rec.get('name', key)}): {aliases}")
+        parts.append("")
 
     # Existing wings for context
     if existing_wings:
@@ -392,10 +404,12 @@ def filter_timeless_topics(topics: list) -> list:
     return kept
 
 
-def analyze_session(session_data: dict, existing_tags: dict, existing_wings: dict, model: str) -> list:
+def analyze_session(
+    session_data: dict, existing_tags: dict, existing_wings: dict, model: str, systems: dict | None = None
+) -> list:
     """Run the analyzer: send session data to Claude CLI and get classified topics."""
     system_prompt = (PROMPTS_DIR / "analyzer.md").read_text(encoding="utf-8")
-    user_prompt = build_analyzer_prompt(session_data, existing_tags, existing_wings)
+    user_prompt = build_analyzer_prompt(session_data, existing_tags, existing_wings, systems=systems)
 
     # Truncate if too large for reliable Haiku responses.
     # Keep both ends so the "Antworte JETZT mit JSON" instruction at the end survives.

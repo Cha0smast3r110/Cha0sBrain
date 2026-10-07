@@ -116,3 +116,15 @@ def test_find_secret():
     assert h.find_secret("Login mit neu@example.com") is None
     assert h.find_secret("Mail an max.mustermann@firma.de") is not None
     assert h.find_secret("Schritt 1: Studio öffnen") is None
+
+
+def test_find_secret_allows_example_domain_variants():
+    # Echtlauf 2026-10-07: Stolperfalle "neu@example.com vs neu@example.co" ist ein Platzhalter
+    assert h.find_secret("`neu@example.com` und `neu@example.co` sind verschieden") is None
+    assert h.find_secret("test@beispiel.org") is None
+    assert h.find_secret("echt@firma.de") is not None
+
+
+def test_resolve_system_alias_matches_slug_form():
+    reg = {"beispiel-crm": {"name": "Beispiel CRM", "aliases": ["datenbank studio"], "projekte": []}}
+    assert h.resolve_system("datenbank-studio", "x", reg) == "beispiel-crm"

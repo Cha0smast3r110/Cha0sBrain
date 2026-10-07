@@ -426,16 +426,6 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
     if shrunk is not None:
         return shrunk
 
-    # If tool output volume alone still blows the budget, progressively shrink
-    # all tool outputs. User messages and recent conversation remain untouched.
-    for limit in (300, 100, 0):
-        shrunk = shrink_tool_results(limit, include_recent=True)
-        if shrunk is not None:
-            return shrunk
-    material = render()
-    if len(material) <= max_chars:
-        return material
-
     # Then shrink old assistant messages to 1500 chars.
     for record in records:
         if record["protected"] or record["msg"].get("role") == "user":
@@ -456,7 +446,14 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
         if len(material) <= max_chars:
             return material
 
-    return material
+    # Last resort: shrink all tool outputs further. Outputs are evidence for beleg.py,
+    # so they only go below 300 chars once old assistant prose is already gone.
+    for limit in (300, 100, 0):
+        shrunk = shrink_tool_results(limit, include_recent=True)
+        if shrunk is not None:
+            return shrunk
+
+    return render()
 
 
 def build_handgriff_prompt(

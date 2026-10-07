@@ -791,3 +791,29 @@ def test_handgriff_material_many_tool_outputs_respects_max_chars_and_keeps_messa
     assert "USER-FULL-" + ("U" * 1200) in material
     for idx in range(10):
         assert f"LAST10-{idx}-" + ("B" * 200) in material
+
+
+def test_handgriff_material_shrinks_old_assistant_prose_before_cutting_tool_outputs_further():
+    """Befehlsausgaben sind Belegmaterial: erst alte Assistant-Prosa kürzen, dann Ausgaben unter 300 Zeichen."""
+    import writer
+
+    conversation = [{"role": "user", "content": "USER-START"}]
+    for idx in range(5):
+        conversation.append({"role": "assistant", "content": f"OLD-{idx}-" + ("B" * 5000)})
+    for idx in range(10):
+        conversation.append({"role": "assistant", "content": f"LAST10-{idx}"})
+    session = {
+        "conversation": conversation,
+        "tool_calls": [
+            {"tool": "Bash", "file": f"cmd-{idx}", "summary": f"command: cmd-{idx}", "result": f"OUT{idx:02d}-" + ("R" * 2000)}
+            for idx in range(20)
+        ],
+        "git_changes": {},
+    }
+
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0], relevant_tool_calls=[0]), session, max_chars=20000)
+
+    assert len(material) <= 20000
+    assert "→ Ausgabe: OUT00-" + ("R" * 294) + "… [gekürzt]" in material
+    assert "OUT19-" + ("R" * 2000) in material
+    assert "OLD-0-" + ("B" * 5000) not in material

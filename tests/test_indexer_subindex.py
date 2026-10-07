@@ -39,3 +39,32 @@ def test_small_wing_moc_keeps_existing_flat_type_sections():
     assert "## Troubleshooting" in moc
     assert "## python" not in moc
     assert "## docker" not in moc
+
+
+def test_scan_vault_groups_handbuch_page_under_handbuch_wing(tmp_path):
+    from indexer import scan_vault
+
+    page = tmp_path / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "---\n"
+        "tags: [crm]\n"
+        "wing: handbuch\n"
+        "type: handgriff\n"
+        "project: example-app\n"
+        "date: 2026-10-08\n"
+        "session_id: s1\n"
+        "difficulty: beginner\n"
+        "system: beispiel-crm\n"
+        "aufgabe: Benutzer anlegen\n"
+        "status: ungeprüft\n"
+        "---\n"
+        "# Beispiel CRM: Benutzer anlegen\n",
+        encoding="utf-8",
+    )
+
+    wings = scan_vault(str(tmp_path))
+
+    assert list(wings.keys()) == ["handbuch"]
+    assert wings["handbuch"][0]["path"] == "handbuch/beispiel-crm/benutzer-anlegen.md"
+    assert wings["handbuch"][0]["type"] == "handgriff"

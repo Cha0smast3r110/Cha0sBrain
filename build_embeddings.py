@@ -16,7 +16,7 @@ def iter_entry_texts(vault_path: str):
     vault = Path(vault_path)
     for path in sorted(vault.glob("*/*.md")):
         wing = path.parent.name
-        if wing.startswith(("_", ".")) or wing == "_quarantine" or path.name.startswith("_"):
+        if wing.startswith(("_", ".")) or wing in {"_quarantine", "handbuch"} or path.name.startswith("_"):
             continue
         slug = path.stem
         try:
@@ -26,6 +26,19 @@ def iter_entry_texts(vault_path: str):
         text = vaultlib.entry_embedding_text(content, slug.replace("-", " "))
         if text:
             yield f"{wing}/{slug}", text
+
+    for path in sorted(vault.glob("handbuch/*/*.md")):
+        if path.name.startswith("_") or path.parent.name.startswith(("_", ".")):
+            continue
+        system = path.parent.name
+        slug = path.stem
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        text = vaultlib.entry_embedding_text(content, slug.replace("-", " "))
+        if text:
+            yield f"handbuch/{system}/{slug}", text
 
 
 def main() -> int:

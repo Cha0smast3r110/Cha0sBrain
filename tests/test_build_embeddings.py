@@ -80,3 +80,22 @@ def test_iter_entry_texts_keeps_title_description_for_invalid_or_missing_cards(t
         ("devtools/invalid-card", "Invalid Card Fallback description"),
         ("devtools/legacy", "Legacy Entry Legacy description"),
     ]
+
+
+def test_iter_entry_texts_includes_handbuch_system_pages(tmp_path: Path):
+    devtools = tmp_path / "devtools"
+    devtools.mkdir()
+    (devtools / "a.md").write_text(_entry(title="A", description="Devtools"), encoding="utf-8")
+    system_dir = tmp_path / "handbuch" / "beispiel-crm"
+    system_dir.mkdir(parents=True)
+    (system_dir / "benutzer-anlegen.md").write_text(
+        _entry(title="Benutzer anlegen", description="Handbuch", lesson=None), encoding="utf-8"
+    )
+    (tmp_path / "handbuch" / "direkt.md").write_text(
+        _entry(title="Direkt", description="Soll nicht als Wing zählen"), encoding="utf-8"
+    )
+    (system_dir / "_MOC.md").write_text("# MOC\n", encoding="utf-8")
+
+    refs = [ref for ref, _text in build_embeddings.iter_entry_texts(str(tmp_path))]
+
+    assert refs == ["devtools/a", "handbuch/beispiel-crm/benutzer-anlegen"]

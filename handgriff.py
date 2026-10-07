@@ -71,6 +71,34 @@ def resolve_system(raw: str, project: str, registry: dict) -> str:
     return raw_slug or slugify(project_s)
 
 
+def list_pages(vault_path: str) -> dict[str, list[str]]:
+    """{system: [aufgabe, ...]} aller Handbuch-Seiten; kaputte Dateien werden uebersprungen.
+
+    Grundlage fuer die Wiedererkennung derselben Aufgabe: der Analyzer bekommt diese Liste
+    und uebernimmt bei gleicher Aufgabe den Namen exakt. Embeddings trennen kurze
+    Aufgaben-Phrasen nicht (gemessen 2026-10-07: "anlegen" vs "loeschen" fast gleich nah).
+    """
+    root = Path(vault_path) / HANDBUCH_WING
+    pages: dict[str, list[str]] = {}
+    try:
+        files = sorted(root.glob("*/*.md"))
+    except OSError:
+        return {}
+    for path in files:
+        if path.name.startswith("_"):
+            continue
+        try:
+            import vaultlib
+
+            fm = vaultlib.parse_typed_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:  # kaputte Seite darf die Liste nicht verhindern
+            continue
+        aufgabe = str((fm or {}).get("aufgabe") or "").strip()
+        if aufgabe:
+            pages.setdefault(path.parent.name, []).append(aufgabe)
+    return pages
+
+
 def page_path(vault_path: str, system: str, aufgabe: str) -> Path:
     return Path(vault_path) / HANDBUCH_WING / slugify(system) / f"{slugify(aufgabe)}.md"
 

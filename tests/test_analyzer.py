@@ -224,3 +224,9 @@ def test_prompt_lists_known_systems_for_handgriffe():
     prompt = build_analyzer_prompt(sd, {}, {}, systems=systems)
     assert "## Bekannte Systeme" in prompt and "beispiel-crm" in prompt and "db studio" in prompt
     assert "## Bekannte Systeme" not in build_analyzer_prompt(sd, {}, {})
+
+
+def test_prompt_lists_existing_handbuch_pages():
+    sd = {"project": "p", "session_id": "s", "conversation": [{"role": "user", "content": "x"}], "tool_calls": []}
+    prompt = build_analyzer_prompt(sd, {}, {}, handbuch_pages={"beispiel-crm": ["Benutzer anlegen"]})
+    assert "## Bestehende Handbuch-Seiten" in prompt and "beispiel-crm: Benutzer anlegen" in prompt

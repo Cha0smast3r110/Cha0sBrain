@@ -50,3 +50,4 @@ Regeln:
   "url:<host>", "rolle:<name>". Nur, was in der Session vorkommt.
 - relevant_conversation/relevant_tool_calls MÜSSEN die Stellen mit den Schritten, der Prüfung und Rückfragen enthalten.
 - Ein Thema, das Handgriff ist, NICHT zusätzlich als anleitung ausgeben.
+- Gehört die Aufgabe zu einer Seite unter "Bestehende Handbuch-Seiten" (auch wenn der User sie anders nennt, z.B. "Mitarbeiter hinzufügen" = "Benutzer anlegen"), übernimm system und aufgabe EXAKT von dort und pack die neue Formulierung in auch_gesucht_als. Anlegen und Löschen sind verschiedene Aufgaben.

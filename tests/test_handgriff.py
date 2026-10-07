@@ -128,3 +128,12 @@ def test_find_secret_allows_example_domain_variants():
 def test_resolve_system_alias_matches_slug_form():
     reg = {"beispiel-crm": {"name": "Beispiel CRM", "aliases": ["datenbank studio"], "projekte": []}}
     assert h.resolve_system("datenbank-studio", "x", reg) == "beispiel-crm"
+
+
+def test_list_pages_reads_aufgabe_per_system(tmp_path):
+    d = tmp_path / "handbuch" / "beispiel-crm"; d.mkdir(parents=True)
+    (d / "benutzer-anlegen.md").write_text('---\ntype: handgriff\naufgabe: "Benutzer anlegen"\n---\n# x\n', encoding="utf-8")
+    (d / "kaputt.md").write_text("kein frontmatter", encoding="utf-8")
+    (tmp_path / "handbuch" / "_systeme.json").write_text("{}", encoding="utf-8")
+    assert h.list_pages(str(tmp_path)) == {"beispiel-crm": ["Benutzer anlegen"]}
+    assert h.list_pages(str(tmp_path / "fehlt")) == {}

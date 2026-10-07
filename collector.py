@@ -41,6 +41,7 @@ def parse_session(jsonl_path: str, start_line: int = 0) -> dict:
     conversation = []
     prior_conv = []
     tool_calls = []
+    tool_call_by_id = {}
     session_id = None
     project_dir = None
     timestamp = None
@@ -81,6 +82,18 @@ def parse_session(jsonl_path: str, start_line: int = 0) -> dict:
                     timestamp = entry.get("timestamp", "")
                 if isinstance(content, str) and content.strip():
                     target_conversation.append({"role": "user", "content": content})
+                elif isinstance(content, list) and not before_start:
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_result":
+                            continue
+                        tool_use_id = str(block.get("tool_use_id") or "")
+                        tool_call = tool_call_by_id.get(tool_use_id)
+                        if tool_call is None:
+                            continue
+                        result = _extract_tool_result_text(block.get("content"))
+                        if block.get("is_error"):
+                            result = "FEHLER: " + result
+                        tool_call["result"] = _truncate_tool_result(result)
 
             elif entry_type == "assistant":
                 msg = entry.get("message", {})
@@ -99,11 +112,16 @@ def parse_session(jsonl_path: str, start_line: int = 0) -> dict:
                                 or tool_input.get("path", "")
                                 or tool_input.get("command", "")
                             )
-                            tool_calls.append({
+                            tool_call = {
                                 "tool": tool_name,
                                 "file": file_path,
                                 "summary": _summarize_input(tool_input),
-                            })
+                                "id": block.get("id", ""),
+                                "result": "",
+                            }
+                            tool_calls.append(tool_call)
+                            if tool_call["id"]:
+                                tool_call_by_id[str(tool_call["id"])] = tool_call
                     if text_parts:
                         target_conversation.append({"role": "assistant", "content": "\n".join(text_parts)})
 
@@ -123,14 +141,34 @@ def parse_session(jsonl_path: str, start_line: int = 0) -> dict:
     }
 
 
+def _extract_tool_result_text(content) -> str:
+    """Extract textual content from a Claude tool_result block."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(str(block.get("text") or ""))
+        return "\n".join(part for part in parts if part)
+    return ""
+
+
+def _truncate_tool_result(text: str) -> str:
+    if len(text) > 2000:
+        return text[:2000] + "… [gekürzt]"
+    return text
+
+
 def _summarize_input(tool_input: dict) -> str:
     """Create a brief summary of tool input for context."""
     parts = []
     for key in ("file_path", "command", "pattern", "old_string", "new_string"):
         if key in tool_input:
             val = str(tool_input[key])
-            if len(val) > 100:
-                val = val[:100] + "..."
+            limit = 400 if key == "command" else 100
+            if len(val) > limit:
+                val = val[:limit] + "..."
             parts.append(f"{key}: {val}")
     return "; ".join(parts) if parts else json.dumps(tool_input)[:200]
 

@@ -158,3 +158,75 @@ def test_parse_session_offset_beyond_end(tmp_path):
     p.write_text(json.dumps({"type": "user", "sessionId": "s", "cwd": "/x", "timestamp": "t", "message": {"content": "a"}}) + "\n")
     sd = parse_session(str(p), start_line=10)
     assert sd["conversation"] == [] and sd["total_lines"] == 1
+
+
+# --- S8: tool_result material -------------------------------------------------
+
+def _write_jsonl(path, rows):
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+
+def test_parse_session_attaches_string_tool_result(tmp_path):
+    p = tmp_path / "s.jsonl"
+    _write_jsonl(p, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "printf ok"}},
+        ]}},
+        {"type": "user", "sessionId": "s", "cwd": "/home/user/example-app", "timestamp": "2026-10-08T10:00:00", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok\n"},
+        ]}},
+    ])
+    sd = parse_session(str(p))
+    assert sd["tool_calls"][0]["id"] == "toolu_1"
+    assert sd["tool_calls"][0]["result"] == "ok\n"
+
+
+def test_parse_session_tool_result_list_text_only_error_unknown_and_truncate(tmp_path):
+    p = tmp_path / "s.jsonl"
+    long = "A" * 5000
+    _write_jsonl(p, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_text", "name": "Read", "input": {"file_path": "README.md"}},
+            {"type": "tool_use", "id": "toolu_error", "name": "Bash", "input": {"command": "false"}},
+            {"type": "tool_use", "id": "toolu_long", "name": "Bash", "input": {"command": "printf long"}},
+        ]}},
+        {"type": "user", "sessionId": "s", "cwd": "/home/user/example-app", "timestamp": "2026-10-08T10:00:00", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_text", "content": [
+                {"type": "text", "text": "sichtbarer text"},
+                {"type": "image", "source": {"type": "base64", "data": "xxx"}},
+            ]},
+            {"type": "tool_result", "tool_use_id": "missing", "content": "ignorieren"},
+            {"type": "tool_result", "tool_use_id": "toolu_error", "is_error": True, "content": "kaputt"},
+            {"type": "tool_result", "tool_use_id": "toolu_long", "content": long},
+        ]}},
+    ])
+    tools = parse_session(str(p))["tool_calls"]
+    assert tools[0]["result"] == "sichtbarer text"
+    assert "image" not in tools[0]["result"]
+    assert tools[1]["result"] == "FEHLER: kaputt"
+    assert tools[2]["result"] == ("A" * 2000) + "… [gekürzt]"
+
+
+def test_parse_session_ignores_tool_result_before_start_line(tmp_path):
+    p = tmp_path / "s.jsonl"
+    _write_jsonl(p, [
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "old", "name": "Bash", "input": {"command": "old"}}]}},
+        {"type": "user", "sessionId": "s", "cwd": "/home/user/example-app", "timestamp": "2026-10-08T10:00:00", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "old", "content": "darf nicht auftauchen"},
+        ]}},
+        {"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "new", "name": "Bash", "input": {"command": "new"}}]}},
+    ])
+    sd = parse_session(str(p), start_line=2)
+    assert sd["tool_calls"] == [{"tool": "Bash", "file": "new", "summary": "command: new", "id": "new", "result": ""}]
+
+
+def test_summarize_input_keeps_long_command_complete_to_350_chars(tmp_path):
+    p = tmp_path / "s.jsonl"
+    command = "python3 -c '" + ("x" * 335) + "'"
+    _write_jsonl(p, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "cmd", "name": "Bash", "input": {"command": command}},
+        ]}},
+    ])
+    summary = parse_session(str(p))["tool_calls"][0]["summary"]
+    assert command in summary

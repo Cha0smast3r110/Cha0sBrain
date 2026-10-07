@@ -1,3 +1,5 @@
+import json
+
 import yaml
 
 
@@ -593,3 +595,73 @@ def test_writer_quarantine_survives_topic_without_project(vault, logs_dir, monke
     result = writer.write_entries([topic], _session(), str(vault), "s1", "2026-10-08", "haiku")
 
     assert result.quarantined
+
+
+# --- S8: tool outputs in handgriff material ----------------------------------
+
+def test_handgriff_material_includes_tool_output_but_generic_prompt_does_not():
+    import writer
+
+    session = {
+        "conversation": [{"role": "user", "content": "Bitte dokumentieren."}],
+        "tool_calls": [{"tool": "Bash", "file": "printf ok", "summary": "command: printf ok", "result": "ERGEBNIS-MARKER"}],
+        "git_changes": {},
+    }
+    topic = _topic(relevant_conversation=[0], relevant_tool_calls=[0])
+
+    material = writer.build_handgriff_material(topic, session)
+    assert "→ Ausgabe: ERGEBNIS-MARKER" in material
+
+    anleitung = {
+        "type": "anleitung", "title": "CLI nutzen", "slug": "cli-nutzen", "wing": "devtools",
+        "project": "example-app", "tags": ["cli"], "difficulty": "beginner", "summary": "s",
+        "relevant_conversation": [0], "relevant_tool_calls": [0],
+    }
+    prompt = writer.build_writer_prompt(anleitung, session, None)
+    assert "ERGEBNIS-MARKER" not in prompt
+
+
+def test_handgriff_material_shrinks_old_tool_outputs_before_messages():
+    import writer
+
+    long_result = "A" * 2500
+    session = {
+        "conversation": [{"role": "assistant", "content": "ALT-MSG-" + ("B" * 5000)}],
+        "tool_calls": [
+            {"tool": "Bash", "file": "old", "summary": "command: old", "result": long_result},
+            {"tool": "Bash", "file": "recent", "summary": "command: recent", "result": "RECENT-" + ("C" * 400)},
+        ],
+        "git_changes": {},
+    }
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0], relevant_tool_calls=[0]), session, max_chars=7600)
+    assert "→ Ausgabe: " + ("A" * 300) + "… [gekürzt]" in material
+    assert "RECENT-" + ("C" * 400) in material
+    assert "ALT-MSG-" + ("B" * 5000) in material
+
+
+def test_beleg_quote_can_come_from_tool_output(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+    from collector import parse_session
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    body = _valid_handgriff_body().replace(EVIDENCE, "Werkzeug meldet: erledigt")
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: body)
+    session_file = vault / "session.jsonl"
+    rows = [
+        {"type": "user", "sessionId": "s1", "cwd": "/home/user/example-app", "timestamp": "2026-10-08T10:00:00", "message": {"content": "Bitte dokumentieren."}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "beispiel"}},
+        ]}},
+        {"type": "user", "sessionId": "s1", "cwd": "/home/user/example-app", "timestamp": "2026-10-08T10:01:00", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "toolu_1", "content": "Werkzeug meldet: erledigt"},
+        ]}},
+    ]
+    session_file.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    session = parse_session(str(session_file))
+
+    result = writer.write_entries([_topic(relevant_conversation=[0], relevant_tool_calls=[0])], session, str(vault), "s1", "2026-10-08", "haiku")
+
+    assert result.written == [vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"]
+    assert result.beleg and result.beleg[0]["belegt"] > 0

@@ -372,6 +372,14 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
     tool_calls = session_data.get("tool_calls") or []
     relevant_tools = _valid_indexes(topic.get("relevant_tool_calls"), len(tool_calls))
     tool_start = min(relevant_tools) if relevant_tools else 0
+    recent_tool_start = max(0, len(tool_calls) - max(1, len(tool_calls) // 10)) if tool_calls else 0
+    tool_records: list[dict] = []
+    for tc_idx, tc in enumerate(tool_calls):
+        tool_records.append({
+            "idx": tc_idx,
+            "tc": tc,
+            "result": str(tc.get("result") or ""),
+        })
 
     def render() -> str:
         parts = ["## Session-Material\n"]
@@ -382,7 +390,8 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
                 parts.append(_format_handgriff_message(record["idx"], record["msg"], record["content"]))
         if tool_calls:
             parts.append("\n## Ausgeführte Befehle\n")
-            for tc in tool_calls[tool_start:]:
+            for tool_record in tool_records[tool_start:]:
+                tc = tool_record["tc"]
                 tool = str(tc.get("tool") or "")
                 file = str(tc.get("file") or "")
                 parts.append(f"- {tool}: {file}\n")
@@ -391,13 +400,27 @@ def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 6
                     if len(summary) > 1500:
                         summary = summary[:1500] + "… [gekürzt]"
                     parts.append(f"  {summary}\n")
+                result = str(tool_record.get("result") or "")
+                if result:
+                    parts.append(f"  → Ausgabe: {result}\n")
         return "".join(parts).rstrip() + "\n"
 
     material = render()
     if len(material) <= max_chars:
         return material
 
-    # First shrink old assistant messages to 1500 chars.
+    # First shrink old tool outputs before the recent tenth to 300 chars.
+    for tool_record in tool_records:
+        if tool_record["idx"] >= recent_tool_start:
+            continue
+        result = str(tool_record.get("result") or "")
+        if len(result) > 300:
+            tool_record["result"] = result[:300] + "… [gekürzt]"
+            material = render()
+            if len(material) <= max_chars:
+                return material
+
+    # Then shrink old assistant messages to 1500 chars.
     for record in records:
         if record["protected"] or record["msg"].get("role") == "user":
             continue

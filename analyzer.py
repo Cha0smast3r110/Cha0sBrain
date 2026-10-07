@@ -402,6 +402,8 @@ def filter_timeless_topics(topics: list) -> list:
             import handgriff
             topic["wing"] = handgriff.HANDBUCH_WING
             topic["slug"] = handgriff.slugify(aufgabe)
+            if not str(topic.get("title") or "").strip():
+                topic["title"] = aufgabe  # Haiku laesst title bei Handgriffen teils weg
             topic.setdefault("difficulty", "beginner")
             kept.append(topic)
             continue

@@ -230,3 +230,12 @@ def test_prompt_lists_existing_handbuch_pages():
     sd = {"project": "p", "session_id": "s", "conversation": [{"role": "user", "content": "x"}], "tool_calls": []}
     prompt = build_analyzer_prompt(sd, {}, {}, handbuch_pages={"beispiel-crm": ["Benutzer anlegen"]})
     assert "## Bestehende Handbuch-Seiten" in prompt and "beispiel-crm: Benutzer anlegen" in prompt
+
+
+def test_filter_gives_handgriff_without_title_a_title():
+    """Haiku liefert Handgriffe teils ohne title; ohne Titel crasht der Writer bzw. die
+    Pipeline verwirft das Topic still ueber required_keys."""
+    t = {"slug": "x", "project": "p", "wing": "w", "type": "handgriff",
+         "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}
+    out = filter_timeless_topics([t])
+    assert out and out[0]["title"] == "Benutzer anlegen"

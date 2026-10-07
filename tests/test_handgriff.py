@@ -127,3 +127,9 @@ def test_list_pages_reads_aufgabe_per_system(tmp_path):
     (tmp_path / "handbuch" / "_systeme.json").write_text("{}", encoding="utf-8")
     assert h.list_pages(str(tmp_path)) == {"beispiel-crm": ["Benutzer anlegen"]}
     assert h.list_pages(str(tmp_path / "fehlt")) == {}
+
+
+def test_slugify_cuts_at_word_boundary():
+    s = h.slugify("Zugriff auf Beispiel-Projekte via Remote-Verbindung dauerhaft einrichten")
+    assert len(s) <= 60
+    assert s == "zugriff-auf-beispiel-projekte-via-remote-verbindung"

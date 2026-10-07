@@ -34,7 +34,9 @@ def slugify(text: str) -> str:
     value = re.sub(r"-+", "-", value)
     if len(value) <= 60:
         return value or "handgriff"
-    trimmed = value[:60].rstrip("-")
+    trimmed = value[:61]
+    trimmed = trimmed[: trimmed.rfind("-")] if "-" in trimmed else value[:60]  # an Wortgrenze kuerzen
+    trimmed = trimmed.rstrip("-")
     return trimmed or "handgriff"
 
 

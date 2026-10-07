@@ -113,6 +113,79 @@ def test_writer_updates_existing_handgriff_without_duplicate_or_downgrade(vault,
     assert "## Schritte" in prompts[-1]
 
 
+def test_writer_reuses_session_page_for_renamed_task(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+
+    responses = [
+        _valid_handgriff_body("Beispiel CRM: Kennzahl prüfen"),
+        _valid_handgriff_body("Beispiel CRM: Kennzahl prüfen"),
+    ]
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: responses.pop(0))
+
+    writer.write_entries(
+        [_topic(aufgabe="Kennzahl prüfen", title="Kennzahl prüfen", slug="kennzahl-pruefen")],
+        _session(),
+        str(vault),
+        "abcd1234-1",
+        "2026-10-07",
+        "haiku",
+    )
+    result = writer.write_entries(
+        [_topic(aufgabe="Kennzahl testen", title="Kennzahl testen", slug="kennzahl-testen")],
+        _session(),
+        str(vault),
+        "abcd1234-2",
+        "2026-10-08",
+        "haiku",
+    )
+
+    pages = sorted((vault / "handbuch" / "beispiel-crm").glob("*.md"))
+    assert pages == [vault / "handbuch" / "beispiel-crm" / "kennzahl-pruefen.md"]
+    assert result.written == pages
+    content = pages[0].read_text(encoding="utf-8")
+    parsed = _fm(pages[0])
+    body_h1 = content.split("---", 2)[2].lstrip().splitlines()[0]
+    assert body_h1 == "# beispiel-crm: Kennzahl prüfen"
+    assert parsed["aufgabe"] == "Kennzahl prüfen"
+    assert parsed["auch_gesucht_als"] == ["kennzahl prüfen", "user anlegen", "kennzahl testen"]
+
+
+def test_writer_session_page_exclude_keeps_two_topics_separate(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body("Beispiel CRM: Kennzahl prüfen"))
+
+    writer.write_entries(
+        [_topic(aufgabe="Kennzahl prüfen", title="Kennzahl prüfen", slug="kennzahl-pruefen")],
+        _session(),
+        str(vault),
+        "abcd1234-1",
+        "2026-10-07",
+        "haiku",
+    )
+    writer.write_entries(
+        [
+            _topic(aufgabe="Kennzahl testen", title="Kennzahl testen", slug="kennzahl-testen"),
+            _topic(aufgabe="Kennzahl checken", title="Kennzahl checken", slug="kennzahl-checken"),
+        ],
+        _session(),
+        str(vault),
+        "abcd1234-2",
+        "2026-10-08",
+        "haiku",
+    )
+
+    pages = sorted(p.name for p in (vault / "handbuch" / "beispiel-crm").glob("*.md"))
+    assert pages == ["kennzahl-checken.md", "kennzahl-pruefen.md"]
+
+
 def test_writer_quarantines_handgriff_with_secret(vault, logs_dir, monkeypatch):
     import semantic
     import writer

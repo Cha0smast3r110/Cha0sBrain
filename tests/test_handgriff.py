@@ -49,6 +49,81 @@ def test_find_existing_ignores_semantic_match_for_other_task(tmp_path, monkeypat
     assert h.find_existing_page(str(tmp_path), "beispiel-crm", "Benutzer anlegen") is None
 
 
+def _handgriff_page(tmp_path, system, aufgabe, session="abcd1234", aliases=None, name=None):
+    p = h.page_path(str(tmp_path), system, name or aufgabe)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fm = {
+        "type": "handgriff",
+        "system": h.slugify(system),
+        "aufgabe": aufgabe,
+        "quellen": [f"session {session}"],
+    }
+    if aliases is not None:
+        fm["auch_gesucht_als"] = aliases
+    p.write_text(h.render_frontmatter(fm) + f"# {system}: {aufgabe}\n", encoding="utf-8")
+    return p
+
+
+def test_find_session_page_matches_same_session_and_similar_task(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-crm", "Kennzahl prüfen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Kennzahl testen", None, "abcd1234-99") == page
+
+
+def test_find_session_page_ignores_other_session(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-crm", "Kennzahl prüfen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Kennzahl testen", None, "zzzz9999-99") is None
+
+
+def test_find_session_page_rejects_opposite_task(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-crm", "Benutzer anlegen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Benutzer löschen", None, "abcd1234-99") is None
+
+
+def test_find_session_page_rejects_opposite_task_even_with_context_overlap(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-crm", "Benutzer Konto anlegen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Benutzer Konto löschen", None, "abcd1234-99") is None
+
+
+def test_find_session_page_matches_compound_task_with_aliases(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-shop", "AGB und Datenschutz hinterlegen", "abcd1234")
+
+    assert h.find_session_page(
+        str(tmp_path),
+        "beispiel-shop",
+        "AGB- und Datenschutz-URLs im Konto hinterlegen und Checkbox aktivieren",
+        None,
+        "abcd1234-99",
+    ) == page
+
+
+def test_find_session_page_matches_substring_tokens(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-blog", "Kopierberechtigungen für Beiträge vergeben", "abcd1234")
+
+    assert h.find_session_page(
+        str(tmp_path),
+        "beispiel-blog",
+        "Duplikatmodul: Berechtigungen für Kopieren vergeben",
+        None,
+        "abcd1234-99",
+    ) == page
+
+
+def test_find_session_page_rejects_single_shared_token(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-crm", "Gruppe für Benachrichtigungen einrichten", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Vorlage an Gruppe versenden", None, "abcd1234-99") is None
+
+
+def test_find_session_page_respects_exclude(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-crm", "Kennzahl prüfen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-crm", "Kennzahl testen", None, "abcd1234-99", exclude={page}) is None
+
+
 def test_merge_never_downgrades_confirmed():
     old = {
         "status": "bestätigt",

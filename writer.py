@@ -559,6 +559,7 @@ def write_entries(
     """
     result = WriteResult()
     project_dir = session_data.get("project_dir", "")
+    written_handgriff_paths: set[Path] = set()
 
     for topic in topics:
         entry_type = topic.get("type", "anleitung")
@@ -572,9 +573,36 @@ def write_entries(
                 str(topic.get("system") or ""), str(topic.get("project") or ""), registry
             )
             topic["system"] = system
-            output_path = handgriff.find_existing_page(
-                vault_path, system, str(topic.get("aufgabe") or "")
-            ) or handgriff.page_path(vault_path, system, str(topic.get("aufgabe") or ""))
+            requested_aufgabe = str(topic.get("aufgabe") or "")
+            output_path = handgriff.find_existing_page(vault_path, system, requested_aufgabe)
+            if output_path is None:
+                session_path = handgriff.find_session_page(
+                    vault_path,
+                    system,
+                    requested_aufgabe,
+                    topic.get("auch_gesucht_als"),
+                    session_id,
+                    exclude=written_handgriff_paths,
+                )
+                if session_path is not None:
+                    output_path = session_path
+                    try:
+                        import vaultlib
+
+                        session_fm = vaultlib.parse_typed_frontmatter(
+                            session_path.read_text(encoding="utf-8")
+                        )
+                    except Exception:
+                        session_fm = {}
+                    old_aufgabe = str((session_fm or {}).get("aufgabe") or "").strip()
+                    if old_aufgabe:
+                        topic["auch_gesucht_als"] = handgriff._union(
+                            topic.get("auch_gesucht_als"), requested_aufgabe, lower=True, max_items=15
+                        )
+                        topic["aufgabe"] = old_aufgabe
+                    logger.info(f"Handgriff: Session-Wiedererkennung {requested_aufgabe!r} -> {output_path}")
+                else:
+                    output_path = handgriff.page_path(vault_path, system, requested_aufgabe)
             topic["wing"] = handgriff.HANDBUCH_WING
             topic["slug"] = output_path.stem
             system_name = str((registry.get(system) or {}).get("name") or system)
@@ -744,6 +772,8 @@ def write_entries(
             )
             output_path.write_text(full_content, encoding="utf-8")
             result.written.append(output_path)
+            if entry_type == "handgriff":
+                written_handgriff_paths.add(output_path)
             if pending_beleg:
                 result.beleg.append(pending_beleg)
             logger.info(f"Written: {output_path}")

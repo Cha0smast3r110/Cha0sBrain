@@ -109,6 +109,108 @@ def find_existing_page(vault_path: str, system: str, aufgabe: str) -> Path | Non
     return exact if exact.exists() else None
 
 
+_SESSION_STOPWORDS = {
+    "und", "oder", "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen",
+    "im", "in", "am", "an", "auf", "fuer", "mit", "von", "zu", "zum", "zur", "neu",
+    "neuen", "neue", "neues", "als", "per", "via", "ueber",
+}
+_VERB_GROUPS = [
+    {"pruefen", "testen", "checken", "kontrollieren"},
+    {"anlegen", "erstellen", "hinzufuegen", "einrichten", "registrieren", "konfigurieren"},
+    {"einreichen", "beantragen", "senden"},
+    {"hinterlegen", "eintragen", "setzen", "speichern"},
+]
+_VERB_EQUIV = {token: group for group in _VERB_GROUPS for token in group}
+_OPPOSITE_GROUPS = [
+    ({"anlegen", "erstellen", "hinzufuegen"}, {"loeschen", "entfernen"}),
+    ({"aktivieren"}, {"deaktivieren"}),
+    ({"starten"}, {"stoppen"}),
+    ({"sperren"}, {"entsperren"}),
+]
+
+
+def _content_tokens(text: str, system: str = "") -> list[str]:
+    system_tokens = set(slugify(system).split("-")) if system else set()
+    out: list[str] = []
+    for token in slugify(text).split("-"):
+        if len(token) < 3 or token in _SESSION_STOPWORDS or token in system_tokens:
+            continue
+        out.append(token)
+    return out
+
+
+def _tokens_similar(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    if _VERB_EQUIV.get(left) is not None and _VERB_EQUIV.get(left) is _VERB_EQUIV.get(right):
+        return True
+    short, long = (left, right) if len(left) <= len(right) else (right, left)
+    return len(short) >= 5 and short in long
+
+
+def _has_opposite_pair(new_tokens: set[str], old_tokens: set[str]) -> bool:
+    for left, right in _OPPOSITE_GROUPS:
+        new_left = bool(new_tokens & left)
+        new_right = bool(new_tokens & right)
+        old_left = bool(old_tokens & left)
+        old_right = bool(old_tokens & right)
+        if new_left != old_left and new_right != old_right and (new_left or old_left) and (new_right or old_right):
+            return True
+    return False
+
+
+def _session_score(new_tokens: list[str], old_tokens: list[str]) -> int:
+    return sum(1 for token in new_tokens if any(_tokens_similar(token, old) for old in old_tokens))
+
+
+def find_session_page(
+    vault_path: str,
+    system: str,
+    aufgabe: str,
+    auch_gesucht_als: list | None,
+    session_id: str,
+    exclude: set[Path] | None = None,
+) -> Path | None:
+    """Find a prior handgriff page for the same session and a compatible task name."""
+    system_slug = slugify(system)
+    root = Path(vault_path) / HANDBUCH_WING / system_slug
+    session_ref = f"session {str(session_id)[:8]}"
+    excluded = {Path(p) for p in (exclude or set())}
+    new_tokens = _content_tokens(aufgabe, system_slug)
+    if not new_tokens:
+        return None
+
+    matches: list[tuple[int, str, Path]] = []
+    try:
+        files = sorted(root.glob("*.md"))
+    except OSError:
+        return None
+    for path in files:
+        if path.name.startswith("_") or path in excluded:
+            continue
+        try:
+            import vaultlib
+
+            fm = vaultlib.parse_typed_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if session_ref not in [str(q) for q in _as_list((fm or {}).get("quellen"))]:
+            continue
+        old_aufgabe = str((fm or {}).get("aufgabe") or "")
+        old_aliases = _as_list((fm or {}).get("auch_gesucht_als"))
+        old_tokens = _content_tokens(" ".join([old_aufgabe] + [str(a) for a in old_aliases]), system_slug)
+        if _has_opposite_pair(set(new_tokens), set(old_tokens)):
+            continue
+        score = _session_score(new_tokens, old_tokens)
+        if score >= 2 or (score >= 1 and len(new_tokens) == 1):
+            matches.append((score, str(path), path))
+
+    if not matches:
+        return None
+    matches.sort(key=lambda item: (-item[0], item[1]))
+    return matches[0][2]
+
+
 def _as_list(value: Any) -> list:
     if value is None:
         return []

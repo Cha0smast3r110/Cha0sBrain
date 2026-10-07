@@ -204,3 +204,25 @@ def test_neunummerierung_auch_in_pruefung_und_stolperfallen():
     assert "1. Prüfe danach" in result.markdown
     assert "2. Prüfe danach" not in result.markdown
     assert result.steps_left == 1
+
+
+def test_eingerueckte_unterpunkte_gehoeren_zum_belegten_schritt():
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Schritte
+
+1. Klicke auf Team > Members > Invite.
+   - Rolle: Vertrieb
+   1. Unterschritt ohne eigenen Beleg
+<!-- beleg: "Klicke auf Team > Members > Invite." -->
+2. Erfunden.
+<!-- beleg: "nicht im Material vorhanden" -->
+"""
+
+    result = beleg.apply(md, MATERIAL)
+
+    assert "   - Rolle: Vertrieb" in result.markdown
+    assert "   1. Unterschritt ohne eigenen Beleg" in result.markdown
+    assert "Erfunden." not in result.markdown
+    assert result.total == 2
+    assert result.steps_left == 1

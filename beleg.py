@@ -14,7 +14,7 @@ CHECKED_SECTIONS = {
     "Rückgängig machen",
 }
 BELEG_RE = re.compile(r'<!--\s*beleg:\s*"(.*?)"\s*-->', re.DOTALL)
-POINT_RE = re.compile(r"^\s*(?:\d+\.|-)\s+")
+POINT_RE = re.compile(r"^(?:\d+\.|-)\s+")
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
 
 

@@ -156,6 +156,7 @@ TYPE_TEMPLATES = {
     "anleitung": "anleitung.md",
     "troubleshooting": "troubleshooting.md",
     "recherche": "recherche.md",
+    "handgriff": "handgriff.md",
 }
 
 # Valid tag pattern: starts with a letter, 2-32 chars, lowercase alphanumeric + hyphens
@@ -416,20 +417,41 @@ def write_entries(
     project_dir = session_data.get("project_dir", "")
 
     for topic in topics:
-        output_path = determine_output_path(vault_path, topic["wing"], topic["slug"])
+        entry_type = topic.get("type", "anleitung")
+        old_fm = None
+
+        if entry_type == "handgriff":
+            import handgriff
+
+            registry = handgriff.load_registry(vault_path)
+            system = handgriff.resolve_system(
+                str(topic.get("system") or ""), str(topic.get("project") or ""), registry
+            )
+            topic["system"] = system
+            output_path = handgriff.find_existing_page(
+                vault_path, system, str(topic.get("aufgabe") or "")
+            ) or handgriff.page_path(vault_path, system, str(topic.get("aufgabe") or ""))
+            topic["wing"] = handgriff.HANDBUCH_WING
+            topic["slug"] = output_path.stem
+        else:
+            output_path = determine_output_path(vault_path, topic["wing"], topic["slug"])
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Existing content for updates
         existing_content = None
         if output_path.exists():
-            existing_content = output_path.read_text(encoding="utf-8")
-            if existing_content.startswith("---"):
-                parts = existing_content.split("---", 2)
+            raw_existing_content = output_path.read_text(encoding="utf-8")
+            if entry_type == "handgriff":
+                import vaultlib
+
+                old_fm = vaultlib.parse_typed_frontmatter(raw_existing_content)
+            existing_content = raw_existing_content
+            if raw_existing_content.startswith("---"):
+                parts = raw_existing_content.split("---", 2)
                 if len(parts) >= 3:
                     existing_content = parts[2].strip()
             logger.info(f"Updating existing entry: {output_path}")
 
-        entry_type = topic.get("type", "anleitung")
         template_file = TYPE_TEMPLATES.get(entry_type, "anleitung.md")
         system_prompt = _load_system_prompt(template_file)
 
@@ -494,7 +516,14 @@ def write_entries(
                 refused = True
                 break  # no retry on refusal, no quarantine
 
-            frontmatter = build_frontmatter(topic, session_id, date)
+            if entry_type == "handgriff":
+                import handgriff
+
+                frontmatter = handgriff.render_frontmatter(
+                    handgriff.merge_frontmatter(old_fm, topic, session_id, date)
+                )
+            else:
+                frontmatter = build_frontmatter(topic, session_id, date)
             full_content = f"{frontmatter}\n{markdown_content}\n"
 
             validation = stylecheck.validate(full_content, entry_type)

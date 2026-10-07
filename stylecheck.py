@@ -45,6 +45,10 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
 MIN_SECTION_LEN = 200
 SECTION_MIN_LEN: dict[str, int] = {"handgriff": 20}
 
+# Handgriff-Prompt verlangt diesen Satz, wenn ein Abschnitt im Material nicht belegt ist
+# (L4: nichts dazuerfinden). Er ist kuerzer als SECTION_MIN_LEN und muss trotzdem gelten.
+NOT_EVIDENCED_PLACEHOLDER = "noch nicht belegt."
+
 # Lektionskarte: der Analyzer-Prompt verlangt max 220 Zeichen, Haiku ueberzieht
 # das aber regelmaessig (gemessen 2026-10-06: 2 von 4 echten Karten bei 250-400).
 # Die harte Grenze liegt deshalb hoeher, damit eine gute, etwas lange Karte nicht
@@ -180,6 +184,8 @@ def _check_sections(body: str, entry_type: str) -> list[str]:
             errors.append(f"section_missing: '{needle}' nicht gefunden in {entry_type}")
             continue
         section_body = sections[match_head].strip()
+        if entry_type == "handgriff" and section_body.lower() == NOT_EVIDENCED_PLACEHOLDER:
+            continue
         if len(section_body) < min_len:
             errors.append(
                 f"section_empty: '{needle}' hat nur {len(section_body)} Zeichen "

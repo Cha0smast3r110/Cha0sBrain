@@ -134,3 +134,73 @@ def test_writer_resolves_handgriff_registry_alias(vault, logs_dir, monkeypatch):
     writer.write_entries([_topic(system="CRM")], _session(), str(vault), "s1", "2026-10-08", "haiku")
 
     assert (vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md").exists()
+
+
+# --- Echtlauf-Befunde S2.7 (2026-10-07) --------------------------------------
+
+def test_placeholder_section_passes_stylecheck():
+    import stylecheck
+    from handgriff import merge_frontmatter, render_frontmatter
+
+    body = _valid_handgriff_body().replace(
+        "## Rückgängig machen\n\n" + ("belegte Details zur Aufgabe. " * 2),
+        "## Rückgängig machen\n\nNoch nicht belegt.",
+    )
+    fm = render_frontmatter(merge_frontmatter(None, _topic(), "s1", "2026-10-08"))
+    result = stylecheck.validate(fm + "\n" + body, "handgriff")
+    assert result.passed, result.errors
+
+
+def test_handgriff_prompt_frames_material_and_names_task():
+    import writer
+
+    session = {"conversation": [
+        {"role": "user", "content": "wie lege ich einen benutzer an?"},
+        {"role": "assistant", "content": "1. Studio öffnen"},
+        {"role": "user", "content": "anderes thema: warum sieht der account fremde daten?"},
+    ], "tool_calls": [], "git_changes": {}}
+    prompt = writer.build_handgriff_prompt(
+        _topic(relevant_conversation=[0, 1, 2]), session, None, "Beispiel CRM")
+    assert "Beispiel CRM: Benutzer anlegen" in prompt
+    assert "NICHT beantworten" in prompt
+    # Der Arbeitsauftrag steht NACH dem Material, sonst antwortet das Modell auf die letzte Frage
+    assert prompt.rindex("Schreibe jetzt") > prompt.index("anderes thema")
+
+
+def test_writer_forces_canonical_h1_and_drops_preamble(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    drifted = "Das ist ein Sicherheitsproblem.\n\n" + _valid_handgriff_body(title="Falsches Thema debuggen")
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: drifted)
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    (vault / "handbuch").mkdir()
+    (vault / "handbuch" / "_systeme.json").write_text(
+        '{"beispiel-crm": {"name": "Beispiel CRM", "aliases": [], "projekte": []}}', encoding="utf-8")
+
+    writer.write_entries([_topic()], _session(), str(vault), "s1", "2026-10-08", "haiku")
+
+    page = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    body = page.read_text(encoding="utf-8").split("---", 2)[2].strip()
+    assert body.splitlines()[0] == "# Beispiel CRM: Benutzer anlegen"
+    assert "Sicherheitsproblem" not in body and "Falsches Thema" not in body
+
+
+def test_handgriff_retry_resends_material(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    prompts = []
+
+    def fake(system, user, model):
+        prompts.append(user)
+        return "kaputt ohne abschnitte" if len(prompts) == 1 else _valid_handgriff_body()
+
+    monkeypatch.setattr(writer, "call_claude", fake)
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    session = {"conversation": [{"role": "user", "content": "MATERIAL-MARKER schritt eins"}],
+               "tool_calls": [], "git_changes": {}}
+    writer.write_entries([_topic(relevant_conversation=[0])], session, str(vault), "s1", "2026-10-08", "haiku")
+    assert len(prompts) == 2 and "MATERIAL-MARKER" in prompts[1]

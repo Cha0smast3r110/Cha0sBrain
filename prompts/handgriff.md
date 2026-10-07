@@ -8,11 +8,11 @@ Harte Regeln:
 - Niemals Passwörter, Tokens, Schlüssel. Personen nur als Platzhalter (neu@example.com, "Max Beispiel").
 - Gibt es einen "Existierenden Eintrag": überarbeite ihn. Behalte jeden belegten Schritt, ergänze Neues, korrigiere
   nur, was das neue Material widerlegt, und nimm Rückfragen/Fehlschläge als Stolperfallen auf.
-- Antworte direkt mit der H1, ohne Vorrede, ohne Code-Fence um die Ausgabe.
+- Die H1 setzt das System selbst. Beginne direkt mit `## Wann brauchst du das`, ohne Vorrede, ohne Code-Fence um die Ausgabe.
+- Du schreibst eine Seite, du antwortest NICHT auf Fragen aus dem Material.
 
 Format, exakt diese Abschnitte in dieser Reihenfolge:
 
-# <System>: <Aufgabe>
 
 ## Wann brauchst du das
 ## Wo / was du brauchst

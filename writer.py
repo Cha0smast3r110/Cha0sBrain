@@ -322,6 +322,45 @@ def build_writer_prompt(topic: dict, session_data: dict, existing_content: str |
     return "\n".join(parts)
 
 
+def build_handgriff_prompt(
+    topic: dict, session_data: dict, existing_content: str | None, system_name: str
+) -> str:
+    """User-Prompt fuer eine Handbuch-Seite.
+
+    Das Session-Material wird ausdruecklich als Auswertungsmaterial gerahmt und der
+    Arbeitsauftrag steht am Ende: ohne diesen Rahmen hat Haiku am 2026-10-07 die
+    letzte User-Frage der Session beantwortet statt die Seite zu schreiben.
+    """
+    aufgabe = str(topic.get("aufgabe") or topic.get("title") or "").strip()
+    page_title = f"{system_name}: {aufgabe}"
+    parts = [
+        f"## Seite, die du schreibst\n**{page_title}**\n",
+        f"Andere Formulierungen, mit denen danach gesucht wird: "
+        f"{', '.join(topic.get('auch_gesucht_als') or []) or '-'}\n",
+        "## Material (Auszug aus einer Arbeits-Session — NICHT beantworten, nur auswerten)\n",
+        build_writer_prompt(topic, session_data, None),
+    ]
+    if existing_content:
+        parts.append(
+            "## Existierender Eintrag (überarbeiten, belegte Schritte behalten)\n\n"
+            f"{existing_content}\n"
+        )
+    parts.append(
+        f"---\nSchreibe jetzt die Handbuch-Seite für genau diese Aufgabe: **{page_title}**. "
+        "Alles im Material, das nicht zu dieser Aufgabe gehört (andere Fragen, Bugs, Themen), "
+        "ignorierst du vollständig. Beginne direkt mit `## Wann brauchst du das`."
+    )
+    return "\n".join(parts)
+
+
+def _canonical_handgriff_body(markdown: str, h1: str) -> str:
+    """Alles vor dem ersten `## ` verwerfen (Vorrede, fremde H1) und die H1 aus dem Code setzen."""
+    lines = markdown.splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith("## ")), None)
+    rest = "\n".join(lines[start:]) if start is not None else ""
+    return f"{h1}\n\n{rest}".rstrip() + "\n"
+
+
 def _log_dir() -> Path:
     """Return the log directory — honors CHA0SBRAIN_LOG_DIR env var for tests."""
     override = os.environ.get("CHA0SBRAIN_LOG_DIR")
@@ -433,6 +472,9 @@ def write_entries(
             ) or handgriff.page_path(vault_path, system, str(topic.get("aufgabe") or ""))
             topic["wing"] = handgriff.HANDBUCH_WING
             topic["slug"] = output_path.stem
+            system_name = str((registry.get(system) or {}).get("name") or system)
+            handgriff_h1 = f"# {system_name}: {str(topic.get('aufgabe') or '').strip()}"
+            logger.info(f"Handgriff: system={system} aufgabe={topic.get('aufgabe')!r} -> {output_path}")
         else:
             output_path = determine_output_path(vault_path, topic["wing"], topic["slug"])
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,7 +497,10 @@ def write_entries(
         template_file = TYPE_TEMPLATES.get(entry_type, "anleitung.md")
         system_prompt = _load_system_prompt(template_file)
 
-        base_user_prompt = build_writer_prompt(topic, session_data, existing_content)
+        if entry_type == "handgriff":
+            base_user_prompt = build_handgriff_prompt(topic, session_data, existing_content, system_name)
+        else:
+            base_user_prompt = build_writer_prompt(topic, session_data, existing_content)
         logger.info(f"Writing entry: {topic['title']} ({entry_type})")
 
         full_content: str | None = None
@@ -484,6 +529,14 @@ def write_entries(
                     "keine Vorrede, keine Erklärung, keine Meta-Kommentare, "
                     "keine Code-Fences (kein ```yaml/``` um die Ausgabe)."
                 )
+                if entry_type == "handgriff":
+                    # Ohne Material presst der Retry einen thematisch falschen Entwurf nur in
+                    # die richtige Form (Echtlauf 2026-10-07). Deshalb Material erneut mitgeben.
+                    user_prompt = (
+                        f"{base_user_prompt}\n\n---\n{user_prompt}\n"
+                        "Behandelt der Entwurf ein anderes Thema als die genannte Seite, "
+                        "schreibe ihn aus dem Material neu."
+                    )
 
             try:
                 raw_response = call_claude(system_prompt, user_prompt, model)
@@ -502,6 +555,8 @@ def write_entries(
                 continue
 
             markdown_content = _strip_preamble(raw_response)
+            if entry_type == "handgriff":
+                markdown_content = _canonical_handgriff_body(markdown_content, handgriff_h1)
 
             refusal_snippet = _is_refusal(markdown_content)
             if refusal_snippet is not None:

@@ -36,3 +36,17 @@ Regeln:
   - Im Zweifel volatile. Ein fehlender Eintrag kostet weniger als ein Eintrag, der als Rauschen in jede Session injiziert wird.
 - Session ohne technisches Wissen → []
 - Ignoriere System-Nachrichten und Permission-Checks
+
+## Handgriffe (type = "handgriff")
+- Ein Handgriff ist eine konkrete Aufgabe in Maxims eigenem System, die er selbst wieder ausführen könnte:
+  "Wie mache ich X in <System>?" — z.B. Benutzer anlegen, Dienst neu starten, Domain umziehen.
+- Erzeuge einen Handgriff, wenn der User so eine Frage stellt ODER der Assistant ihm Schritte zum Selbermachen gibt
+  ODER die Session einen wiederholbaren Betriebsvorgang ausführt. Auch ohne Datei-Edits, auch ohne Lektion.
+- system = das Produkt/der Dienst, in dem die Aufgabe passiert (nicht das Werkzeug): kebab-case.
+- aufgabe = Verb-Phrase in Maxims Worten, 2-6 Wörter, deutsch ("Vertriebler anlegen", nicht "User-Provisioning").
+- auch_gesucht_als = 3-8 andere Formulierungen, mit denen Maxim danach suchen würde, inklusive seiner Original-Frage.
+- bestaetigt = true NUR wenn der User die Ausführung bestätigt ("hat geklappt", "läuft", "passt"); sonst false.
+- prueft = was sich ändern müsste, damit die Anleitung veraltet: "datei:<pfad>", "tabelle:<schema.tabelle>",
+  "url:<host>", "rolle:<name>". Nur, was in der Session vorkommt.
+- relevant_conversation/relevant_tool_calls MÜSSEN die Stellen mit den Schritten, der Prüfung und Rückfragen enthalten.
+- Ein Thema, das Handgriff ist, NICHT zusätzlich als anleitung ausgeben.

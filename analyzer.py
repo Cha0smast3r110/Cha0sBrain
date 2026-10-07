@@ -84,11 +84,15 @@ def build_analyzer_prompt(session_data: dict, existing_tags: dict, existing_wing
 def _normalize_analyzer_topics(result: list) -> list:
     """Keep analyzer response backward-compatible while exposing S1 card fields."""
     card_fields = ("lesson", "trigger", "trigger_terms", "evidence", "derivable")
+    handgriff_fields = ("system", "aufgabe", "auch_gesucht_als", "bestaetigt", "prueft")
     normalized = []
     for topic in result:
         if isinstance(topic, dict):
             for field in card_fields:
                 topic.setdefault(field, None)
+            if topic.get("type") == "handgriff":
+                for field in handgriff_fields:
+                    topic.setdefault(field, None)
         normalized.append(topic)
     return normalized
 
@@ -335,7 +339,7 @@ ANALYZER_SCHEMA = json.dumps({
             "slug": {"type": "string", "description": "english-kebab-case, max 50 chars"},
             "project": {"type": "string"},
             "wing": {"type": "string", "description": "Thematischer Fluegel, kebab-case, deutsch"},
-            "type": {"type": "string", "enum": ["anleitung", "troubleshooting", "recherche"]},
+            "type": {"type": "string", "enum": ["anleitung", "troubleshooting", "recherche", "handgriff"]},
             "tags": {"type": "array", "items": {"type": "string"}},
             "difficulty": {"type": "string", "enum": ["beginner", "intermediate", "advanced"]},
             "keep": {"type": "string", "enum": ["timeless", "volatile"]},
@@ -347,7 +351,12 @@ ANALYZER_SCHEMA = json.dumps({
             "trigger": {"type": ["string", "null"]},
             "trigger_terms": {"type": ["array", "null"], "items": {"type": "string"}},
             "evidence": {"type": ["string", "null"]},
-            "derivable": {"type": ["boolean", "null"]}
+            "derivable": {"type": ["boolean", "null"]},
+            "system": {"type": "string"},
+            "aufgabe": {"type": "string"},
+            "auch_gesucht_als": {"type": "array", "items": {"type": "string"}},
+            "bestaetigt": {"type": ["boolean", "null"]},
+            "prueft": {"type": ["array", "null"], "items": {"type": "string"}}
         }
     }
 })
@@ -365,6 +374,17 @@ def filter_timeless_topics(topics: list) -> list:
             continue
         if topic.get("type") == "research":
             topic["type"] = "recherche"  # Haiku liefert gelegentlich die englische Form
+        if topic.get("type") == "handgriff":
+            aufgabe = str(topic.get("aufgabe") or "").strip()
+            if not aufgabe:
+                logger.info(f"Skip (Handgriff ohne Aufgabe): {topic.get('title', '<untitled>')}")
+                continue
+            import handgriff
+            topic["wing"] = handgriff.HANDBUCH_WING
+            topic["slug"] = handgriff.slugify(aufgabe)
+            topic.setdefault("difficulty", "beginner")
+            kept.append(topic)
+            continue
         if not str(topic.get("lesson") or "").strip() and topic.get("type") != "recherche":
             logger.info(f"Skip (keine Lektion): {topic.get('slug', '<untitled>')}")
             continue

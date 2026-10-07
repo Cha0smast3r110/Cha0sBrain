@@ -168,6 +168,48 @@ def test_filter_normalisiert_research_und_leere_lektion():
     assert kept[0]["type"] == "recherche"
 
 
+def test_filter_keeps_handgriff_without_lesson(caplog):
+    caplog.set_level("INFO")
+    t = {
+        "title": "Benutzer anlegen",
+        "slug": "x",
+        "project": "p",
+        "wing": "irgendwas",
+        "type": "handgriff",
+        "system": "beispiel-crm",
+        "aufgabe": "Benutzer anlegen",
+        "tags": [],
+        "summary": "s",
+        "lesson": None,
+    }
+    out = filter_timeless_topics([t])
+    assert len(out) == 1 and out[0]["wing"] == "handbuch" and out[0]["slug"] == "benutzer-anlegen"
+    assert out[0]["difficulty"] == "beginner"
+    assert "Skip (keine Lektion): benutzer-anlegen" not in caplog.text
+
+
+def test_filter_drops_handgriff_without_aufgabe():
+    t = {"title": "x", "slug": "x", "project": "p", "wing": "w", "type": "handgriff", "system": "s", "aufgabe": " "}
+    assert filter_timeless_topics([t]) == []
+
+
+def test_filter_still_drops_anleitung_without_lesson():
+    t = {"title": "x", "slug": "x", "project": "p", "wing": "w", "type": "anleitung", "lesson": None}
+    assert filter_timeless_topics([t]) == []
+
+
+def test_analyzer_schema_contains_handgriff_fields():
+    from analyzer import ANALYZER_SCHEMA
+
+    schema = json.loads(ANALYZER_SCHEMA)
+    props = schema["items"]["properties"]
+    assert "handgriff" in props["type"]["enum"]
+    assert "system" in props and "aufgabe" in props
+    assert props["auch_gesucht_als"]["type"] == "array"
+    assert props["bestaetigt"]["type"] == ["boolean", "null"]
+    assert props["prueft"]["type"] == ["array", "null"]
+
+
 def test_karte_mit_300_zeichen_bleibt_gueltig():
     import stylecheck
     fm = {"lesson": "Wenn X, liegt es an Y; Fix: Z. " + "x" * 270, "trigger": "beim Deploy",

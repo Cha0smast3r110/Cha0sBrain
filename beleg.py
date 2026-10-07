@@ -16,6 +16,10 @@ CHECKED_SECTIONS = {
 BELEG_RE = re.compile(r'<!--\s*beleg:\s*"(.*?)"\s*-->', re.DOTALL)
 POINT_RE = re.compile(r"^(?:\d+\.|-)\s+")
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$")
+HEDGE_RE = re.compile(
+    r"(?i)\b(vermutlich|wahrscheinlich|vermute|vielleicht|möglicherweise|moeglicherweise|eventuell|"
+    r"evtl\.|könnte|koennte|dürfte|duerfte|nehme an|ich glaube|scheint)\b"
+)
 
 
 @dataclass
@@ -119,6 +123,25 @@ def _has_valid_beleg(point: str, material: str) -> bool:
     return any(quote_found(match.group(1), material) for match in BELEG_RE.finditer(point))
 
 
+def _first_valid_beleg_quote(point: str, material: str) -> str | None:
+    for match in BELEG_RE.finditer(point):
+        quote = match.group(1)
+        if quote_found(quote, material):
+            return quote
+    return None
+
+
+def _mark_assumption_if_needed(point: str, quote: str) -> str:
+    cleaned = _strip_beleg_comments(point)
+    if not HEDGE_RE.search(quote) or "Annahme" in cleaned:
+        return cleaned
+    lines = cleaned.splitlines(keepends=True)
+    if not lines:
+        return cleaned
+    lines[0] = re.sub(r"^(\s*(?:\d+\.|-)\s+)", r"\1Annahme: ", lines[0], count=1)
+    return "".join(lines)
+
+
 def _snippet(point: str) -> str:
     cleaned = re.sub(r"\s+", " ", _strip_beleg_comments(point)).strip()
     return cleaned[:80]
@@ -156,9 +179,10 @@ def _process_checked_section(title: str, body: str, material: str) -> tuple[str,
         if not point.strip():
             continue
         total += 1
-        if _has_valid_beleg(point, material):
+        quote = _first_valid_beleg_quote(point, material)
+        if quote is not None:
             belegt += 1
-            kept.append(_strip_beleg_comments(point))
+            kept.append(_mark_assumption_if_needed(point, quote))
         else:
             removed.append(_snippet(point))
 

@@ -9,6 +9,7 @@ Harte Regeln:
   `<!-- beleg: "<wörtliches Zitat aus dem Material, 8–200 Zeichen>" -->`.
   Mehrere Beleg-Zeilen pro Punkt sind erlaubt; einer muss passen.
 - Zitiere wörtlich aus dem Material, kürze nur am Anfang/Ende. Punkte ohne Zitat werden automatisch gelöscht.
+- Was im Material nur vermutet und nicht bestätigt wird (vermutlich, wahrscheinlich, könnte …), schreibst du als `Annahme: …`, nie als Tatsache.
 - Beispiel:
   `1. Öffne im beispiel-crm Team > Members > Invite.`
   `Warum: Dort startest du die Einladung.`

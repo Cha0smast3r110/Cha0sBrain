@@ -226,3 +226,79 @@ def test_eingerueckte_unterpunkte_gehoeren_zum_belegten_schritt():
     assert "Erfunden." not in result.markdown
     assert result.total == 2
     assert result.steps_left == 1
+
+
+def test_vermuteter_bulletpunkt_bekommt_annahme_praefix():
+    material = "vermutlich liegt es am Cache"
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Stolperfallen
+
+- Leere den Cache, wenn die Ansicht alt wirkt.
+<!-- beleg: "vermutlich liegt es am Cache" -->
+"""
+
+    result = beleg.apply(md, material)
+
+    assert "- Annahme: Leere den Cache" in result.markdown
+
+
+def test_vermuteter_nummerierter_schritt_bekommt_annahme_praefix():
+    material = "Der Export könnte noch laufen"
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Schritte
+
+1. Warte auf den Export.
+<!-- beleg: "Der Export könnte noch laufen" -->
+"""
+
+    result = beleg.apply(md, material)
+
+    assert "1. Annahme: Warte auf den Export." in result.markdown
+
+
+def test_bestaetigter_punkt_bekommt_keinen_annahme_praefix():
+    material = "Der Export läuft jetzt"
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Stolperfallen
+
+- Der Export läuft jetzt.
+<!-- beleg: "Der Export läuft jetzt" -->
+"""
+
+    result = beleg.apply(md, material)
+
+    assert "- Annahme:" not in result.markdown
+    assert "- Der Export läuft jetzt." in result.markdown
+
+
+def test_annahme_praefix_wird_nicht_verdoppelt():
+    material = "wahrscheinlich ist die Rolle noch nicht aktiv"
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Stolperfallen
+
+- Annahme: Warte auf die Rolle.
+<!-- beleg: "wahrscheinlich ist die Rolle noch nicht aktiv" -->
+"""
+
+    result = beleg.apply(md, material)
+
+    assert result.markdown.count("Annahme:") == 1
+
+
+def test_hedge_regex_nutzt_wortgrenzen():
+    material = "Der Scheinwerfer ist aktiv"
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Stolperfallen
+
+- Prüfe den Scheinwerfer.
+<!-- beleg: "Der Scheinwerfer ist aktiv" -->
+"""
+
+    result = beleg.apply(md, material)
+
+    assert "Annahme:" not in result.markdown

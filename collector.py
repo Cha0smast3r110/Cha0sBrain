@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -175,3 +176,38 @@ def collect_git_changes(project_dir: str, session_start: str) -> dict:
         logger.warning(f"Git error: {e}")
 
     return result
+
+
+QUESTION_RE = re.compile(
+    r"\b(wie\s+(mache|mach|kann|lege|leg|richte|finde|komme|krieg|kriege|bekomme|stelle|ändere|aendere|lösche|loesche|"
+    r"füge|fuege|starte|teste|prüfe|pruefe|geht|funktioniert|funktioniert\s+das\s+bei\s+mir)\b|wie\s+(ich|man)\s+\S+|"
+    r"wo\s+(finde|stelle|sehe|ändere|aendere|kann\s+ich|muss\s+ich)\b|"
+    r"was\s+(muss|soll)\s+ich\b|schritt\s+für\s+schritt|how\s+do\s+i\b)",
+    re.IGNORECASE,
+)
+OPERATIVE_RE = re.compile(
+    r"\b(systemctl|journalctl|ssh|scp|psql|docker|supabase|stripe|crontab|nginx|certbot|tailscale|"
+    r"curl\s+-X\s*(POST|PUT|PATCH|DELETE))\b",
+    re.IGNORECASE,
+)
+_NUMBERED_LINE_RE = re.compile(r"^\s*\d+[.)]\s+\S", re.MULTILINE)
+MIN_NUMBERED_STEPS = 3
+MIN_OPERATIVE_CALLS = 2
+
+
+def has_handgriff_signal(session_data: dict) -> bool:
+    """True, wenn die Session eine Anleitung an Maxim oder operative Handgriffe enthält."""
+    conversation = session_data.get("conversation") or []
+    asked = False
+    for msg in conversation:
+        content = msg.get("content") or ""
+        if msg.get("role") == "user" and QUESTION_RE.search(content):
+            asked = True
+        elif asked and msg.get("role") == "assistant":
+            if len(_NUMBERED_LINE_RE.findall(content)) >= MIN_NUMBERED_STEPS:
+                return True
+    operative = sum(
+        1 for tc in session_data.get("tool_calls") or []
+        if tc.get("tool") == "Bash" and OPERATIVE_RE.search(tc.get("file") or "")
+    )
+    return operative >= MIN_OPERATIVE_CALLS

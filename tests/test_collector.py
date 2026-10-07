@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from collector import parse_session, collect_git_changes, derive_project_id
+from collector import parse_session, collect_git_changes, derive_project_id, has_handgriff_signal
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -68,3 +68,71 @@ class TestCollectGitChanges:
         assert result["files_changed"] == []
         assert result["diff"] == ""
         assert result["commits"] == []
+
+
+STEPS = "So geht's:\n1. Studio öffnen\n2. Tabelle wählen\n3. Zeile einfügen\n"
+
+
+def _sd(conv, tools=()):
+    return {"conversation": conv, "tool_calls": list(tools)}
+
+
+def test_signal_question_plus_numbered_steps():
+    sd = _sd([
+        {"role": "user", "content": "wie lege ich einen neuen benutzer im beispiel-crm an?"},
+        {"role": "assistant", "content": STEPS},
+    ])
+    assert has_handgriff_signal(sd) is True
+
+
+def test_signal_indirect_question():
+    # Wortlaut-Muster des Belegfalls (S0 gemessen): indirekte Frage "wie ich ... kann"
+    sd = _sd([
+        {"role": "user", "content": "ich möchte wissen, wie ich selbst einen neuen account anlegen kann"},
+        {"role": "assistant", "content": STEPS},
+    ])
+    assert has_handgriff_signal(sd) is True
+
+
+def test_no_signal_steps_without_question():
+    sd = _sd([
+        {"role": "user", "content": "fasse den artikel zusammen"},
+        {"role": "assistant", "content": STEPS},
+    ])
+    assert has_handgriff_signal(sd) is False
+
+
+def test_no_signal_question_without_steps():
+    sd = _sd([
+        {"role": "user", "content": "wie funktioniert dns?"},
+        {"role": "assistant", "content": "DNS löst Namen auf."},
+    ])
+    assert has_handgriff_signal(sd) is False
+
+
+def test_steps_before_question_do_not_count():
+    sd = _sd([
+        {"role": "assistant", "content": STEPS},
+        {"role": "user", "content": "wie mache ich das backup?"},
+    ])
+    assert has_handgriff_signal(sd) is False
+
+
+def test_signal_two_operative_bash_calls():
+    tools = [
+        {"tool": "Bash", "file": "systemctl --user restart example.service", "summary": ""},
+        {"tool": "Bash", "file": "journalctl --user -u example.service -n 50", "summary": ""},
+    ]
+    assert has_handgriff_signal(_sd([{"role": "user", "content": "x"}], tools)) is True
+
+
+def test_one_operative_call_is_not_enough():
+    tools = [
+        {"tool": "Bash", "file": "systemctl status example", "summary": ""},
+        {"tool": "Bash", "file": "ls -la", "summary": ""},
+    ]
+    assert has_handgriff_signal(_sd([{"role": "user", "content": "x"}], tools)) is False
+
+
+def test_empty_session_data_no_crash():
+    assert has_handgriff_signal({}) is False

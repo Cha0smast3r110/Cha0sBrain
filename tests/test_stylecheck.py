@@ -261,6 +261,72 @@ def test_normalize_no_false_positive_on_lesung():
     assert "losung" not in _normalize("Lesung")
 
 
+def _handgriff_page(status="ungeprüft", body_extra="", extra=None):
+    from tests.conftest import make_frontmatter
+
+    fm_extra = {"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "status": status}
+    if extra:
+        fm_extra.update(extra)
+    fm = make_frontmatter(entry_type="handgriff", wing="handbuch", extra=fm_extra)
+    body = "\n# Beispiel CRM: Benutzer anlegen\n\n"
+    for section in [
+        "Wann brauchst du das",
+        "Wo / was du brauchst",
+        "Schritte",
+        "So prüfst du, ob es geklappt hat",
+        "Stolperfallen",
+        "Rückgängig machen",
+        "Wenn du nicht weiterkommst",
+    ]:
+        body += f"## {section}\n\n" + ("belegte Details zur Aufgabe. " * 2) + "\n\n"
+    return fm + body + body_extra
+
+
+def test_handgriff_valid_page_passes():
+    from stylecheck import validate
+
+    result = validate(_handgriff_page(), "handgriff")
+
+    assert result.passed, result.errors
+
+
+def test_handgriff_missing_section_fails():
+    from stylecheck import validate
+
+    content = _handgriff_page().replace("## Rückgängig machen", "## Rollback")
+    result = validate(content, "handgriff")
+
+    assert not result.passed
+    assert any("ruckgangig" in e.lower() for e in result.errors)
+
+
+def test_handgriff_invalid_status_fails():
+    from stylecheck import validate
+
+    result = validate(_handgriff_page(status="fertig"), "handgriff")
+
+    assert not result.passed
+    assert any("handgriff_schema" in e and "status" in e for e in result.errors)
+
+
+def test_handgriff_missing_aufgabe_fails():
+    from stylecheck import validate
+
+    result = validate(_handgriff_page(extra={"aufgabe": ""}), "handgriff")
+
+    assert not result.passed
+    assert any("handgriff_schema" in e and "aufgabe" in e for e in result.errors)
+
+
+def test_handgriff_secret_in_body_fails():
+    from stylecheck import validate
+
+    result = validate(_handgriff_page(body_extra="\npassword: geheim123456\n"), "handgriff")
+
+    assert not result.passed
+    assert any("secret_pattern" in e for e in result.errors)
+
+
 
 def _valid_card_extra(**overrides):
     data = {

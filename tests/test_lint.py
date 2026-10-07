@@ -55,6 +55,33 @@ def _valid_anleitung_body(title="Titel"):
     return body
 
 
+def _valid_handgriff_body(title="Beispiel CRM: Benutzer anlegen", body_extra=""):
+    body = f"# {title}\n\n"
+    for section in [
+        "Wann brauchst du das",
+        "Wo / was du brauchst",
+        "Schritte",
+        "So prüfst du, ob es geklappt hat",
+        "Stolperfallen",
+        "Rückgängig machen",
+        "Wenn du nicht weiterkommst",
+    ]:
+        body += f"## {section}\n\n" + ("belegte Details zur Aufgabe. " * 2) + "\n\n"
+    return body + body_extra
+
+
+def _write_handgriff_entry(vault, slug, *, body_extra=""):
+    fm = make_frontmatter(
+        entry_type="handgriff",
+        wing="handbuch",
+        extra={"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "status": "ungeprüft"},
+    )
+    path = vault / "handbuch" / "beispiel-crm" / f"{slug}.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(fm + "\n" + _valid_handgriff_body(body_extra=body_extra), encoding="utf-8")
+    return path
+
+
 def test_incremental_scan_skips_unchanged_files(vault, logs_dir, tmp_path):
     from lint import lint_incremental
 
@@ -157,6 +184,34 @@ def test_incremental_scan_invalid_card_warns_without_quarantine(vault, logs_dir)
     assert path.exists()
     assert not (vault / "_quarantine" / "invalid-card.md").exists()
     assert "card_schema" in warnings_path.read_text(encoding="utf-8")
+
+
+def test_incremental_scan_valid_handgriff_stays_put(vault, logs_dir):
+    from lint import lint_incremental
+
+    path = _write_handgriff_entry(vault, "ok")
+    state_path = logs_dir / "lint_state.json"
+    warnings_path = logs_dir / "lint_warnings.jsonl"
+
+    report = lint_incremental(vault, state_path, warnings_path=warnings_path)
+
+    assert report.scanned == 1
+    assert report.quarantined == 0
+    assert path.exists()
+
+
+def test_incremental_scan_handgriff_secret_quarantines(vault, logs_dir):
+    from lint import lint_incremental
+
+    path = _write_handgriff_entry(vault, "secret", body_extra="\npassword: geheim123456\n")
+    state_path = logs_dir / "lint_state.json"
+    warnings_path = logs_dir / "lint_warnings.jsonl"
+
+    report = lint_incremental(vault, state_path, warnings_path=warnings_path)
+
+    assert report.quarantined == 1
+    assert not path.exists()
+    assert (vault / "_quarantine" / "secret.md").exists()
 
 
 def _card_extra(*, evidence='"commit abc123"', stale: bool = False) -> dict:

@@ -15,7 +15,7 @@ REQUIRED_FRONTMATTER_KEYS = {
     "tags", "wing", "type", "project", "date", "session_id", "difficulty"
 }
 
-VALID_ENTRY_TYPES = {"anleitung", "troubleshooting", "recherche"}
+VALID_ENTRY_TYPES = {"anleitung", "troubleshooting", "recherche", "handgriff"}
 
 REQUIRED_SECTIONS: dict[str, list[str]] = {
     # Section-Namen als lowercase-Substrings. Matching ist case-insensitive,
@@ -36,9 +36,14 @@ REQUIRED_SECTIONS: dict[str, list[str]] = {
         "worum geht", "fragestellung", "kontext",
         "recherche-ergebnisse", "fazit", "offene fragen",
     ],
+    "handgriff": [
+        "wann brauchst", "was du brauchst", "schritte", "so prufst",
+        "stolperfallen", "ruckgangig", "wenn du nicht weiterkommst",
+    ],
 }
 
 MIN_SECTION_LEN = 200
+SECTION_MIN_LEN: dict[str, int] = {"handgriff": 20}
 
 # Lektionskarte: der Analyzer-Prompt verlangt max 220 Zeichen, Haiku ueberzieht
 # das aber regelmaessig (gemessen 2026-10-06: 2 von 4 echten Karten bei 250-400).
@@ -165,6 +170,7 @@ def _check_sections(body: str, entry_type: str) -> list[str]:
     errors: list[str] = []
     required = REQUIRED_SECTIONS.get(entry_type, [])
     sections = _section_bodies(body)
+    min_len = SECTION_MIN_LEN.get(entry_type, MIN_SECTION_LEN)
     for needle in required:
         needle_norm = _normalize(needle)
         match_head = next(
@@ -174,11 +180,30 @@ def _check_sections(body: str, entry_type: str) -> list[str]:
             errors.append(f"section_missing: '{needle}' nicht gefunden in {entry_type}")
             continue
         section_body = sections[match_head].strip()
-        if len(section_body) < MIN_SECTION_LEN:
+        if len(section_body) < min_len:
             errors.append(
                 f"section_empty: '{needle}' hat nur {len(section_body)} Zeichen "
-                f"(min {MIN_SECTION_LEN})"
+                f"(min {min_len})"
             )
+    return errors
+
+
+def _check_handgriff_schema(fm: dict | None, body: str) -> list[str]:
+    if not isinstance(fm, dict) or fm.get("type") != "handgriff":
+        return []
+    import handgriff
+
+    errors: list[str] = []
+    if not str(fm.get("system") or "").strip():
+        errors.append("handgriff_schema: missing system")
+    if not str(fm.get("aufgabe") or "").strip():
+        errors.append("handgriff_schema: missing aufgabe")
+    status = fm.get("status")
+    if status not in handgriff.STATUS_VALUES:
+        errors.append(f"handgriff_schema: invalid status {status!r}")
+    secret = handgriff.find_secret(body)
+    if secret:
+        errors.append(f"secret_pattern: {secret}")
     return errors
 
 
@@ -324,6 +349,7 @@ def validate(content: str, entry_type: str) -> ValidationResult:
         errors.append(err)
 
     errors.extend(_check_sections(body, entry_type))
+    errors.extend(_check_handgriff_schema(fm, body))
 
     warnings.extend(_check_forbidden_phrases(body))
     warnings.extend(_check_card_schema(fm))

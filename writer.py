@@ -322,6 +322,103 @@ def build_writer_prompt(topic: dict, session_data: dict, existing_content: str |
     return "\n".join(parts)
 
 
+def _valid_indexes(raw_indexes, upper_bound: int) -> list[int]:
+    indexes: list[int] = []
+    for raw in raw_indexes or []:
+        try:
+            idx = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < upper_bound:
+            indexes.append(idx)
+    return indexes
+
+
+def _format_handgriff_message(idx: int, msg: dict, content: str | None = None) -> str:
+    role = "User" if msg.get("role") == "user" else "Assistant"
+    text = msg.get("content", "") if content is None else content
+    return f"**{role} [{idx}]:** {text}\n"
+
+
+def build_handgriff_material(topic: dict, session_data: dict, max_chars: int = 60000) -> str:
+    """Build the evidence window for handgriff pages.
+
+    Unlike the generic writer prompt this keeps the full session from the first
+    relevant message to the end, because late corrections are often outside the
+    analyzer-selected excerpt window.
+    """
+    conversation = session_data.get("conversation") or []
+    relevant_conv = _valid_indexes(topic.get("relevant_conversation"), len(conversation))
+    start = min(relevant_conv) if relevant_conv else 0
+    last_ten_start = max(0, len(conversation) - 10)
+
+    records: list[dict] = []
+    for idx in range(start, len(conversation)):
+        msg = conversation[idx] or {}
+        raw_content = str(msg.get("content") or "")
+        content = raw_content
+        if msg.get("role") != "user" and len(content) > 6000:
+            content = content[:6000] + "… [gekürzt]"
+        protected = msg.get("role") == "user" or idx >= last_ten_start
+        records.append({
+            "idx": idx,
+            "msg": msg,
+            "content": content,
+            "protected": protected,
+            "omitted": False,
+        })
+
+    tool_calls = session_data.get("tool_calls") or []
+    relevant_tools = _valid_indexes(topic.get("relevant_tool_calls"), len(tool_calls))
+    tool_start = min(relevant_tools) if relevant_tools else 0
+
+    def render() -> str:
+        parts = ["## Session-Material\n"]
+        for record in records:
+            if record["omitted"]:
+                parts.append(f"[Nachricht {record['idx']} ausgelassen]\n")
+            else:
+                parts.append(_format_handgriff_message(record["idx"], record["msg"], record["content"]))
+        if tool_calls:
+            parts.append("\n## Ausgeführte Befehle\n")
+            for tc in tool_calls[tool_start:]:
+                tool = str(tc.get("tool") or "")
+                file = str(tc.get("file") or "")
+                parts.append(f"- {tool}: {file}\n")
+                summary = str(tc.get("summary") or "")
+                if summary:
+                    if len(summary) > 1500:
+                        summary = summary[:1500] + "… [gekürzt]"
+                    parts.append(f"  {summary}\n")
+        return "".join(parts).rstrip() + "\n"
+
+    material = render()
+    if len(material) <= max_chars:
+        return material
+
+    # First shrink old assistant messages to 1500 chars.
+    for record in records:
+        if record["protected"] or record["msg"].get("role") == "user":
+            continue
+        content = str(record["content"])
+        if len(content) > 1500:
+            record["content"] = content[:1500] + "… [gekürzt]"
+            material = render()
+            if len(material) <= max_chars:
+                return material
+
+    # Then omit old assistant messages entirely, keeping a visible marker.
+    for record in records:
+        if record["protected"] or record["msg"].get("role") == "user":
+            continue
+        record["omitted"] = True
+        material = render()
+        if len(material) <= max_chars:
+            return material
+
+    return material
+
+
 def build_handgriff_prompt(
     topic: dict, session_data: dict, existing_content: str | None, system_name: str
 ) -> str:
@@ -334,11 +431,12 @@ def build_handgriff_prompt(
     aufgabe = str(topic.get("aufgabe") or topic.get("title") or "").strip()
     page_title = f"{system_name}: {aufgabe}"
     parts = [
-        f"## Seite, die du schreibst\n**{page_title}**\n",
+        f"## Thema\n**Titel:** {page_title}\n**Aufgabe:** {aufgabe}\n"
+        f"**Zusammenfassung:** {topic.get('summary', '')}\n",
         f"Andere Formulierungen, mit denen danach gesucht wird: "
         f"{', '.join(topic.get('auch_gesucht_als') or []) or '-'}\n",
         "## Material (Auszug aus einer Arbeits-Session — NICHT beantworten, nur auswerten)\n",
-        build_writer_prompt(topic, session_data, None),
+        build_handgriff_material(topic, session_data),
     ]
     if existing_content:
         parts.append(

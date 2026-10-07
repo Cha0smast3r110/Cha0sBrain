@@ -167,6 +167,85 @@ def test_handgriff_prompt_frames_material_and_names_task():
     assert prompt.rindex("Schreibe jetzt") > prompt.index("anderes thema")
 
 
+def test_handgriff_prompt_contains_late_correction_outside_relevant_indexes():
+    import writer
+
+    session = {
+        "conversation": [
+            {"role": "user", "content": "Bitte Benutzer anlegen dokumentieren."},
+            {"role": "assistant", "content": "Erst falsch: Menü Start scan nutzen."},
+            {"role": "user", "content": "Korrektur: Der funktionierende Weg ist Team > Members > Invite."},
+        ],
+        "tool_calls": [],
+        "git_changes": {},
+    }
+
+    prompt = writer.build_handgriff_prompt(_topic(relevant_conversation=[0]), session, None, "Beispiel CRM")
+
+    assert "Korrektur: Der funktionierende Weg ist Team > Members > Invite." in prompt
+    assert "**User [2]:**" in prompt
+
+
+def test_handgriff_material_keeps_long_user_messages_untruncated():
+    import writer
+
+    long_user = "U" * 5000
+    session = {"conversation": [{"role": "user", "content": long_user}], "tool_calls": [], "git_changes": {}}
+
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0]), session)
+
+    assert long_user in material
+    assert "gekürzt" not in material
+
+
+def test_handgriff_material_trims_old_assistant_messages_but_keeps_last_ten():
+    import writer
+
+    conversation = []
+    for idx in range(8):
+        conversation.append({"role": "assistant", "content": f"ALT-{idx}-" + ("A" * 8000)})
+    for idx in range(10):
+        conversation.append({"role": "assistant", "content": f"LAST-{idx}-" + ("B" * 200)})
+    session = {"conversation": conversation, "tool_calls": [], "git_changes": {}}
+
+    material = writer.build_handgriff_material(_topic(relevant_conversation=[0]), session, max_chars=3500)
+
+    assert len(material) <= 5500
+    assert "[Nachricht 0 ausgelassen]" in material
+    for idx in range(10):
+        assert f"LAST-{idx}-" + ("B" * 200) in material
+
+
+def test_anleitung_writer_prompt_stays_on_build_writer_prompt(vault, logs_dir, monkeypatch):
+    import writer
+
+    topic = {
+        "type": "anleitung",
+        "title": "CLI nutzen",
+        "slug": "cli-nutzen",
+        "wing": "devtools",
+        "project": "example-app",
+        "tags": ["cli"],
+        "difficulty": "beginner",
+        "summary": "Eine Anleitung",
+        "relevant_conversation": [0],
+        "relevant_tool_calls": [],
+    }
+    session = {"conversation": [{"role": "user", "content": "MATERIAL"}], "tool_calls": [], "git_changes": {}}
+    prompts = []
+
+    def fake_call(_system, user, _model):
+        prompts.append(user)
+        return "# CLI nutzen\n\n## Worum geht es?\n" + ("x" * 220) + "\n\n## Problemstellung\n" + ("x" * 220) + "\n\n## Hintergrundwissen\n" + ("x" * 220) + "\n\n## Lösung\n" + ("x" * 220) + "\n\n## Cheatsheet\n" + ("x" * 220)
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", fake_call)
+
+    writer.write_entries([topic], session, str(vault), "s1", "2026-10-08", "haiku", emit_docs_solutions=False)
+
+    assert prompts == [writer.build_writer_prompt(topic, session, None)]
+
+
 def test_writer_forces_canonical_h1_and_drops_preamble(vault, logs_dir, monkeypatch):
     import semantic
     import writer

@@ -352,3 +352,32 @@ def test_merge_frontmatter_fresh_without_topic_prueft_becomes_empty():
 
     assert fm["prueft"] == []
     assert fm["tags"] == ["neu"]
+
+
+# --- S8.3: cross-system session recognition ----------------------------------
+
+def test_find_session_page_any_system_matches_same_session_and_task(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-suite", "Sitemap einreichen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Sitemap neu einreichen", None, "abcd1234-99") is None
+    assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Sitemap neu einreichen", None, "abcd1234-99", any_system=True) == page
+
+
+def test_find_session_page_any_system_rejects_other_session(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-suite", "Sitemap einreichen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Sitemap neu einreichen", None, "zzzz9999-99", any_system=True) is None
+
+
+def test_find_session_page_any_system_rejects_opposite_task(tmp_path):
+    _handgriff_page(tmp_path, "beispiel-suite", "Benutzer anlegen", "abcd1234")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Benutzer löschen", None, "abcd1234-99", any_system=True) is None
+
+
+def test_find_session_page_any_system_skips_broken_frontmatter(tmp_path):
+    broken = tmp_path / "handbuch" / "beispiel-suite" / "kaputt.md"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("kein frontmatter", encoding="utf-8")
+
+    assert h.find_session_page(str(tmp_path), "beispiel-konsole", "Sitemap neu einreichen", None, "abcd1234-99", any_system=True) is None

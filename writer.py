@@ -611,16 +611,30 @@ def write_entries(
             )
             topic["system"] = system
             requested_aufgabe = str(topic.get("aufgabe") or "")
+            requested_system = system
             output_path = handgriff.find_existing_page(vault_path, system, requested_aufgabe)
             if output_path is None:
+                excluded_paths = written_handgriff_paths | reserved_exact_paths
                 session_path = handgriff.find_session_page(
                     vault_path,
                     system,
                     requested_aufgabe,
                     topic.get("auch_gesucht_als"),
                     session_id,
-                    exclude=written_handgriff_paths | reserved_exact_paths,
+                    exclude=excluded_paths,
                 )
+                cross_system = False
+                if session_path is None:
+                    session_path = handgriff.find_session_page(
+                        vault_path,
+                        system,
+                        requested_aufgabe,
+                        topic.get("auch_gesucht_als"),
+                        session_id,
+                        exclude=excluded_paths,
+                        any_system=True,
+                    )
+                    cross_system = session_path is not None
                 if session_path is not None:
                     output_path = session_path
                     try:
@@ -631,13 +645,23 @@ def write_entries(
                         )
                     except Exception:
                         session_fm = {}
+                    old_system = str((session_fm or {}).get("system") or session_path.parent.name).strip()
                     old_aufgabe = str((session_fm or {}).get("aufgabe") or "").strip()
+                    if cross_system and old_system:
+                        system = old_system
+                        topic["system"] = old_system
                     if old_aufgabe:
                         topic["auch_gesucht_als"] = handgriff._union(
                             topic.get("auch_gesucht_als"), requested_aufgabe, lower=True, max_items=15
                         )
                         topic["aufgabe"] = old_aufgabe
-                    logger.info(f"Handgriff: Session-Wiedererkennung {requested_aufgabe!r} -> {output_path}")
+                    if cross_system:
+                        logger.info(
+                            f"Handgriff: Session-Wiedererkennung systemübergreifend "
+                            f"{requested_system}/{requested_aufgabe} -> {output_path}"
+                        )
+                    else:
+                        logger.info(f"Handgriff: Session-Wiedererkennung {requested_aufgabe!r} -> {output_path}")
                 else:
                     output_path = handgriff.page_path(vault_path, system, requested_aufgabe)
             topic["wing"] = handgriff.HANDBUCH_WING

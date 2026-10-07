@@ -686,3 +686,84 @@ def test_writer_fresh_handgriff_replaces_old_prueft(vault, logs_dir, monkeypatch
     assert parsed["tags"] == ["neu"]
     assert parsed["quellen"] == ["session aaaa1111", "session bbbb2222"]
     assert parsed["status"] == "bestätigt"
+
+
+
+def _write_registry(vault):
+    import json
+    (vault / "handbuch").mkdir(exist_ok=True)
+    (vault / "handbuch" / "_systeme.json").write_text(json.dumps({
+        "beispiel-suite": {"name": "Beispiel Suite", "aliases": [], "projekte": []},
+        "beispiel-konsole": {"name": "Beispiel Konsole", "aliases": [], "projekte": []},
+    }), encoding="utf-8")
+
+
+def test_writer_cross_system_reuses_same_session_page_and_keeps_old_system(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    _write_registry(vault)
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body("Beispiel Suite: Sitemap einreichen"))
+
+    old_topic = _topic(system="beispiel-suite", aufgabe="Sitemap einreichen", title="Sitemap einreichen", slug="sitemap-einreichen")
+    writer.write_entries([old_topic], _session(), str(vault), "abcd1234-1", "2026-10-07", "haiku")
+
+    new_topic = _topic(system="beispiel-konsole", aufgabe="Sitemap neu einreichen", title="Sitemap neu einreichen", slug="sitemap-neu-einreichen")
+    result = writer.write_entries([new_topic], _session(), str(vault), "abcd1234-2", "2026-10-08", "haiku")
+
+    old_page = vault / "handbuch" / "beispiel-suite" / "sitemap-einreichen.md"
+    assert result.written == [old_page]
+    assert not (vault / "handbuch" / "beispiel-konsole" / "sitemap-neu-einreichen.md").exists()
+    parsed = _fm(old_page)
+    assert parsed["system"] == "beispiel-suite"
+    assert parsed["aufgabe"] == "Sitemap einreichen"
+    assert "sitemap neu einreichen" in parsed["auch_gesucht_als"]
+    assert old_page.read_text(encoding="utf-8").split("---", 2)[2].lstrip().splitlines()[0] == "# Beispiel Suite: Sitemap einreichen"
+
+
+def test_writer_cross_system_ignores_other_session_and_creates_new(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    _write_registry(vault)
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body("Beispiel Konsole: Sitemap neu einreichen"))
+
+    old_topic = _topic(system="beispiel-suite", aufgabe="Sitemap einreichen", title="Sitemap einreichen", slug="sitemap-einreichen")
+    writer.write_entries([old_topic], _session(), str(vault), "abcd1234-1", "2026-10-07", "haiku")
+
+    new_topic = _topic(system="beispiel-konsole", aufgabe="Sitemap neu einreichen", title="Sitemap neu einreichen", slug="sitemap-neu-einreichen")
+    result = writer.write_entries([new_topic], _session(), str(vault), "zzzz9999-1", "2026-10-08", "haiku")
+
+    new_page = vault / "handbuch" / "beispiel-konsole" / "sitemap-neu-einreichen.md"
+    assert result.written == [new_page]
+    assert new_page.exists()
+
+
+def test_writer_same_system_session_match_wins_over_foreign(vault, logs_dir, monkeypatch):
+    import handgriff
+    import semantic
+    import writer
+
+    _write_registry(vault)
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body("Beispiel Konsole: Kennzahl prüfen"))
+
+    for system, title in (("beispiel-suite", "Beispiel Suite"), ("beispiel-konsole", "Beispiel Konsole")):
+        path = handgriff.page_path(str(vault), system, "Kennzahl prüfen")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fm = {
+            "type": "handgriff", "wing": "handbuch", "system": system, "aufgabe": "Kennzahl prüfen",
+            "date": "2026-10-07", "session_id": "abcd1234-1", "difficulty": "beginner",
+            "status": "ungeprüft", "tags": [], "auch_gesucht_als": ["kennzahl prüfen"],
+            "quellen": ["session abcd1234"], "prueft": [], "description": "s", "belegt": "1/1",
+        }
+        path.write_text(handgriff.render_frontmatter(fm) + "\n" + _valid_handgriff_body(f"{title}: Kennzahl prüfen"), encoding="utf-8")
+
+    result = writer.write_entries([_topic(system="beispiel-konsole", aufgabe="Kennzahl testen", title="Kennzahl testen", slug="kennzahl-testen")], _session(), str(vault), "abcd1234-2", "2026-10-08", "haiku")
+
+    assert result.written == [vault / "handbuch" / "beispiel-konsole" / "kennzahl-pruefen.md"]

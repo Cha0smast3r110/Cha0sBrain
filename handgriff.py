@@ -235,42 +235,57 @@ def find_session_page(
     auch_gesucht_als: list | None,
     session_id: str,
     exclude: set[Path] | None = None,
+    any_system: bool = False,
 ) -> Path | None:
     """Find a prior handgriff page for the same session and a compatible task name."""
     system_slug = slugify(system)
-    root = Path(vault_path) / HANDBUCH_WING / system_slug
+    handbuch_root = Path(vault_path) / HANDBUCH_WING
     session_ref = f"session {str(session_id)[:8]}"
     excluded = {Path(p) for p in (exclude or set())}
-    new_tokens = _content_tokens(aufgabe, system_slug)
-    if not new_tokens:
-        return None
+
+    if any_system:
+        try:
+            roots = sorted(
+                p for p in handbuch_root.iterdir()
+                if p.is_dir() and not p.name.startswith("_") and p.name != system_slug
+            )
+        except OSError:
+            return None
+    else:
+        roots = [handbuch_root / system_slug]
 
     matches: list[tuple[int, str, Path]] = []
-    try:
-        files = sorted(root.glob("*.md"))
-    except OSError:
-        return None
-    for path in files:
-        if path.name.startswith("_") or path in excluded:
+    for root in roots:
+        candidate_system = root.name
+        comparison_system = f"{system_slug} {candidate_system}"
+        new_tokens = _content_tokens(aufgabe, comparison_system)
+        if not new_tokens:
             continue
         try:
-            import vaultlib
+            files = sorted(root.glob("*.md"))
+        except OSError:
+            continue
+        for path in files:
+            if path.name.startswith("_") or path in excluded:
+                continue
+            try:
+                import vaultlib
 
-            fm = vaultlib.parse_typed_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if session_ref not in [str(q) for q in _as_list((fm or {}).get("quellen"))]:
-            continue
-        old_aufgabe = str((fm or {}).get("aufgabe") or "")
-        old_aliases = _as_list((fm or {}).get("auch_gesucht_als"))
-        old_tokens = _content_tokens(" ".join([old_aufgabe] + [str(a) for a in old_aliases]), system_slug)
-        if _has_opposite_pair(set(new_tokens), set(old_tokens)):
-            continue
-        if not _verbs_compatible(_verbs(aufgabe), _verbs(old_aufgabe)):
-            continue
-        score = _session_score(new_tokens, old_tokens)
-        if score >= 2:
-            matches.append((score, str(path), path))
+                fm = vaultlib.parse_typed_frontmatter(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if session_ref not in [str(q) for q in _as_list((fm or {}).get("quellen"))]:
+                continue
+            old_aufgabe = str((fm or {}).get("aufgabe") or "")
+            old_aliases = _as_list((fm or {}).get("auch_gesucht_als"))
+            old_tokens = _content_tokens(" ".join([old_aufgabe] + [str(a) for a in old_aliases]), comparison_system)
+            if _has_opposite_pair(set(new_tokens), set(old_tokens)):
+                continue
+            if not _verbs_compatible(_verbs(aufgabe), _verbs(old_aufgabe)):
+                continue
+            score = _session_score(new_tokens, old_tokens)
+            if score >= 2:
+                matches.append((score, str(path), path))
 
     if not matches:
         return None

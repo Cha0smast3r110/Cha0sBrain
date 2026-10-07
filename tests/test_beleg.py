@@ -75,6 +75,15 @@ def test_zitat_unter_acht_zeichen_gilt_nicht():
     assert not beleg.quote_found("Invite", MATERIAL)
 
 
+def test_zitat_nur_satzzeichen_gilt_nicht():
+    assert not beleg.quote_found("........", "Material mit ........ Satzzeichen.")
+
+
+def test_synthetischer_material_header_gilt_nicht_als_beleg():
+    material = "## Session-Material\n**User [0]:** Klicke auf Team > Members > Invite.\n"
+    assert not beleg.quote_found("Session-Material", material)
+
+
 def test_neunummerierung_nach_entfernung():
     md = """# Beispiel CRM: Benutzer anlegen
 
@@ -126,6 +135,23 @@ select * from echte_kunden;
 
     assert "select *" not in result.markdown
     assert "Noch nicht belegt." in result.markdown
+
+
+def test_mehrzeiliger_belegkommentar_wird_entfernt():
+    md = """# Beispiel CRM: Benutzer anlegen
+
+## Schritte
+
+1. Klicke auf Team > Members > Invite.
+<!-- beleg: "Klicke auf Team >
+Members > Invite." -->
+"""
+
+    result = beleg.apply(md, "Klicke auf Team > Members > Invite.")
+
+    assert result.steps_left == 1
+    assert "<!-- beleg" not in result.markdown
+    assert "Members > Invite.\" -->" not in result.markdown
 
 
 def test_ungepruefte_abschnitte_bleiben_bis_auf_belegkommentare_unveraendert():

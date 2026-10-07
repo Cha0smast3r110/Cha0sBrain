@@ -52,16 +52,17 @@ def normalize(s: str) -> str:
 
 def quote_found(quote: str, material: str) -> bool:
     normalized_quote = normalize(quote)
-    return len(normalized_quote) >= 8 and normalized_quote in normalize(material)
+    if len(normalized_quote) < 8:
+        return False
+    if not any(ch.isalnum() for ch in normalized_quote):
+        return False
+    if re.fullmatch(r"(?:session[\s-]*material|ausgef(?:ü|ue)hrte[\s-]*befehle)", normalized_quote):
+        return False
+    return normalized_quote in normalize(material)
 
 
 def _strip_beleg_comments(text: str) -> str:
-    lines = []
-    for line in text.splitlines(keepends=True):
-        if re.match(r"^\s*<!--\s*beleg:\s*\".*?\"\s*-->\s*$", line):
-            continue
-        lines.append(line)
-    return "".join(lines)
+    return re.sub(r'(?ms)^[ \t]*<!--\s*beleg:\s*".*?"\s*-->[ \t]*\n?', '', text)
 
 
 def _split_sections(markdown: str) -> list[tuple[str | None, str | None, str]]:

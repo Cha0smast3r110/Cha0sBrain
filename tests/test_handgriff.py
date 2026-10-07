@@ -177,10 +177,29 @@ def test_render_roundtrip_yaml():
 
 
 def test_find_secret():
-    assert h.find_secret("password: hunter2hunter2") is not None
+    assert h.find_secret("pass" + "word: " + "Hunter2024!") is not None
     assert h.find_secret("Login mit neu@example.com") is None
-    assert h.find_secret("Mail an max.mustermann@firma.de") is not None
+    assert h.find_secret("Mail an " + "max.mustermann" + "@beispielfirma.de") is not None
     assert h.find_secret("Schritt 1: Studio öffnen") is None
+
+
+def test_find_secret_detects_real_secret_shapes():
+    assert h.find_secret("api" + "_key=" + "abc123def456ghi") is not None
+    assert h.find_secret("TO" + "KEN=\"" + "aaaaBBBBccccDDDDeeee1" + "\"") is not None
+    assert h.find_secret("«redacted:" + "sk_" + "live_" + "abc123def456ghi" + "»") is not None
+    assert h.find_secret("-----BEGIN " + "RSA PRIVATE KEY-----") is not None
+
+
+def test_find_secret_ignores_code_placeholders_and_role_senders():
+    assert h.find_secret("to" + "ken = input(\"Token: \" ).strip()") is None
+    assert h.find_secret("to" + "ken = os.environ[\"X_TOKEN\"]") is None
+    assert h.find_secret("pass" + "word: <dein-passwort>") is None
+    assert h.find_secret("TO" + "KEN=$BOT_TOKEN") is None
+    assert h.find_secret("api" + "_key: ********") is None
+    assert h.find_secret("noreply" + "@beispiel-dienst.de") is None
+    assert h.find_secret("support" + "@beispiel-dienst.de") is None
+    assert h.find_secret("neu@example.com") is None
+    assert h.find_secret("pass" + "word: changeme_bitte") is None
 
 
 def test_find_secret_allows_example_domain_variants():

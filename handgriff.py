@@ -17,13 +17,20 @@ _UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 _SECRET_PATTERNS = [
-    re.compile(r"(?i)(passwor[dt]|secret|api[_-]?key|token)\s*[:=]\s*\S{6,}"),
     re.compile(r"sk_(live|test)_[A-Za-z0-9]{8,}"),
     re.compile(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
 ]
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(passwor[dt]|secret|api[_-]?key|token)\s*[:=]\s*['\"]?([A-Za-z0-9_\-./+=~!@#$%^&*]{8,})"
+)
 _EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 _ALLOWED_EXAMPLE_DOMAINS = {"example.com", "example.org", "beispiel.de"}
+_ROLE_EMAIL_LOCAL_PARTS = {
+    "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon", "postmaster",
+    "support", "info", "hello", "kontakt", "contact", "help", "billing",
+    "notifications", "notification", "team", "service",
+}
 
 
 def slugify(text: str) -> str:
@@ -344,11 +351,26 @@ def find_secret(text: str) -> str | None:
     """Return a shortened first secret/email match or None."""
     value = str(text or "")
     best: tuple[int, str] | None = None
+    for match in _SECRET_ASSIGNMENT_RE.finditer(value):
+        secret_value = match.group(2)
+        folded = secret_value.casefold()
+        if secret_value.startswith(("$", "<", "{", "%", "os.")):
+            continue
+        if set(secret_value) <= {"*", "x", "X", "."}:
+            continue
+        if any(marker in folded for marker in ("example", "beispiel", "placeholder", "dein", "your")):
+            continue
+        if not any(ch.isdigit() for ch in secret_value) and len(secret_value) < 20:
+            continue
+        best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
     for pattern in _SECRET_PATTERNS:
         match = pattern.search(value)
         if match:
             best = (match.start(), match.group(0)) if best is None or match.start() < best[0] else best
     for match in _EMAIL_RE.finditer(value):
+        local = match.group(0).split("@", 1)[0].casefold()
+        if local in _ROLE_EMAIL_LOCAL_PARTS:
+            continue
         domain = match.group(1).lower()
         # Platzhalter-Domains inkl. Varianten (example.co als Tippfehler-Beispiel ist kein echter Kontakt)
         if domain not in _ALLOWED_EXAMPLE_DOMAINS and not domain.startswith(("example.", "beispiel.")):

@@ -52,6 +52,16 @@ def _parse(session_id: str, timestamp: str = "2026-10-01T12:00:00Z") -> dict:
     }
 
 
+def _existing_handgriff(vault: Path, session_id: str = "s1", system: str = "beispiel-crm", aufgabe: str = "Benutzer anlegen") -> Path:
+    path = vault / "handbuch" / system / "benutzer-anlegen.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = handbuch_miner.handgriff.render_frontmatter(
+        {"type": "handgriff", "system": system, "aufgabe": aufgabe, "quellen": [f"session {session_id[:8]}"]}
+    )
+    path.write_text(fm + f"# {system}: {aufgabe}\n", encoding="utf-8")
+    return path
+
+
 def test_only_handgriff_topics_reach_writer(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     sessions = tmp_path / "sessions"
@@ -329,3 +339,81 @@ def test_miner_passes_fresh_model_and_records_beleg(tmp_path, monkeypatch, capsy
     assert seen_kwargs["handgriff_model"] == "sonnet"
     assert rec["beleg"] == [{"path": "p", "belegt": 2, "total": 3, "removed": []}]
     assert "Belege 2/3" in capsys.readouterr().out
+
+
+def test_miner_retries_once_when_prior_session_handgriffe_vanish(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    _existing_handgriff(vault, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[list[dict]] = []
+
+    def fake_analyze(_sd, *_args, **kwargs):
+        calls.append(kwargs["session_handgriffe"])
+        if len(calls) == 1:
+            return [{"type": "troubleshooting", "title": "Nur Analyse"}]
+        return [{"type": "handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}]
+
+    written = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", fake_analyze)
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[written], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert len(calls) == 2
+    assert calls[0][0]["aufgabe"] == "Benutzer anlegen"
+    assert result["analyzer_retry"] == 1
+    assert result["pages"] == 1
+    assert "Analyzer-Wiederholungen 1" in capsys.readouterr().out
+
+
+def test_miner_retries_once_and_finishes_when_retry_still_has_no_handgriff(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    _existing_handgriff(vault, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda sd, *_a, **_k: calls.append(sd["session_id"]) or [{"type": "troubleshooting", "title": "Nur Analyse"}],
+    )
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+
+    stored = json.loads(state.read_text(encoding="utf-8"))["s1"]
+    assert calls == ["s1", "s1"]
+    assert result["done"] == 1 and result["pages"] == 0
+    assert stored["status"] == "done"
+
+
+def test_miner_does_not_retry_without_prior_session_handgriffe(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda sd, *_a, **_k: calls.append(sd["session_id"]) or [{"type": "troubleshooting", "title": "Nur Analyse"}],
+    )
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert calls == ["s1"]
+    assert result["analyzer_retry"] == 0

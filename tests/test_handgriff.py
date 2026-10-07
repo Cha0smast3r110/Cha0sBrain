@@ -204,6 +204,17 @@ def test_list_pages_reads_aufgabe_per_system(tmp_path):
     assert h.list_pages(str(tmp_path / "fehlt")) == {}
 
 
+def test_pages_from_session_reads_prior_handgriffe(tmp_path):
+    page = _handgriff_page(tmp_path, "beispiel-crm", "Benutzer anlegen", "abcd1234")
+    _handgriff_page(tmp_path, "beispiel-crm", "Benutzer löschen", "zzzz9999")
+    broken = tmp_path / "handbuch" / "beispiel-crm" / "kaputt.md"
+    broken.write_text("kein frontmatter", encoding="utf-8")
+
+    assert h.pages_from_session(str(tmp_path), "abcd1234-99") == [
+        {"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "path": page}
+    ]
+
+
 def test_slugify_cuts_at_word_boundary():
     s = h.slugify("Zugriff auf Beispiel-Projekte via Remote-Verbindung dauerhaft einrichten")
     assert len(s) <= 60

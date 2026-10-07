@@ -13,7 +13,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 def build_analyzer_prompt(
     session_data: dict, existing_tags: dict, existing_wings: dict, systems: dict | None = None,
-    handbuch_pages: dict | None = None,
+    handbuch_pages: dict | None = None, session_handgriffe: list[dict] | None = None,
 ) -> str:
     """Build the user prompt for the analyzer Haiku call."""
     parts = []
@@ -41,6 +41,17 @@ def build_analyzer_prompt(
         for system, aufgaben in sorted(handbuch_pages.items()):
             for aufgabe in aufgaben:
                 parts.append(f"- {system}: {aufgabe}")
+        parts.append("")
+
+    if session_handgriffe:
+        parts.append("## Handgriffe, die diese Session früher ergeben hat\n")
+        for item in session_handgriffe:
+            parts.append(f"- {item.get('system')}: {item.get('aufgabe')}")
+        parts.append(
+            "Sind das weiterhin Handgriffe? Dann gib sie als type handgriff aus und übernimm "
+            "system und aufgabe EXAKT. Lass einen nur weg, wenn die Session dazu wirklich "
+            "keine Schritte zum Selbermachen enthält."
+        )
         parts.append("")
 
     # Existing wings for context
@@ -417,12 +428,13 @@ def filter_timeless_topics(topics: list) -> list:
 
 def analyze_session(
     session_data: dict, existing_tags: dict, existing_wings: dict, model: str, systems: dict | None = None,
-    handbuch_pages: dict | None = None,
+    handbuch_pages: dict | None = None, session_handgriffe: list[dict] | None = None,
 ) -> list:
     """Run the analyzer: send session data to Claude CLI and get classified topics."""
     system_prompt = (PROMPTS_DIR / "analyzer.md").read_text(encoding="utf-8")
     user_prompt = build_analyzer_prompt(
-        session_data, existing_tags, existing_wings, systems=systems, handbuch_pages=handbuch_pages
+        session_data, existing_tags, existing_wings, systems=systems,
+        handbuch_pages=handbuch_pages, session_handgriffe=session_handgriffe
     )
 
     # Truncate if too large for reliable Haiku responses.

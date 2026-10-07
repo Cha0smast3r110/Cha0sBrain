@@ -514,7 +514,9 @@ def process_session(
     systems = handgriff.load_registry(vault_path)
     topics = analyze_session(
         session_data, existing_tags, existing_wings, model,
-        systems=systems, handbuch_pages=handgriff.list_pages(vault_path),
+        systems=systems,
+        handbuch_pages=handgriff.list_pages(vault_path),
+        session_handgriffe=handgriff.pages_from_session(vault_path, session_id),
     )
 
     if not topics:

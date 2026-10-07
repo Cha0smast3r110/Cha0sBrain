@@ -232,6 +232,21 @@ def test_prompt_lists_existing_handbuch_pages():
     assert "## Bestehende Handbuch-Seiten" in prompt and "beispiel-crm: Benutzer anlegen" in prompt
 
 
+def test_prompt_lists_session_handgriffe_only_when_present():
+    sd = {"project": "p", "session_id": "s", "conversation": [{"role": "user", "content": "x"}], "tool_calls": []}
+    prompt = build_analyzer_prompt(
+        sd,
+        {},
+        {},
+        session_handgriffe=[{"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "path": Path("x.md")}],
+    )
+
+    assert "## Handgriffe, die diese Session früher ergeben hat" in prompt
+    assert "- beispiel-crm: Benutzer anlegen" in prompt
+    assert "übernimm system und aufgabe EXAKT" in prompt
+    assert "## Handgriffe, die diese Session früher ergeben hat" not in build_analyzer_prompt(sd, {}, {})
+
+
 def test_filter_gives_handgriff_without_title_a_title():
     """Haiku liefert Handgriffe teils ohne title; ohne Titel crasht der Writer bzw. die
     Pipeline verwirft das Topic still ueber required_keys."""

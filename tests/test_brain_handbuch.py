@@ -136,3 +136,26 @@ def test_process_session_passes_handgriff_model_to_writer(tmp_path, monkeypatch)
     brain.process_session("s1", "", cfg, logging.getLogger("t"), session_file=_jsonl(tmp_path, lines))
 
     assert seen["handgriff_model"] == "sonnet"
+
+
+def test_process_session_passes_prior_session_handgriffe_to_analyzer(tmp_path, monkeypatch):
+    import handgriff
+
+    monkeypatch.setattr(brain, "PROCESSED_SESSIONS_FILE", tmp_path / "processed.json")
+    monkeypatch.setattr(brain, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(brain, "collect_git_changes", lambda d, t: {"commits": [], "files_changed": [], "diff": ""})
+    monkeypatch.setattr(brain, "has_handgriff_signal", lambda session_data: True)
+    monkeypatch.setattr(handgriff, "pages_from_session", lambda vault_path, session_id: [{"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "path": Path("x.md")}])
+    seen = {}
+
+    def fake_analyze(*args, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(brain, "analyze_session", fake_analyze)
+    lines = [_user("wie lege ich einen benutzer im beispiel-crm an?"), _assistant("1. Studio öffnen")]
+    cfg = {"vault_path": str(tmp_path / "vault")}
+
+    brain.process_session("s1", "", cfg, logging.getLogger("t"), session_file=_jsonl(tmp_path, lines))
+
+    assert seen["session_handgriffe"] == [{"system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "path": Path("x.md")}]

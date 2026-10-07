@@ -216,6 +216,7 @@ def run_miner(
         "skipped_done": 0,
         "belegt": 0,
         "beleg_total": 0,
+        "analyzer_retry": 0,
     }
     any_written = False
     os.environ["CHA0SBRAIN_RUNNING"] = "1"
@@ -241,6 +242,7 @@ def run_miner(
             session_data["git_changes"] = {"commits": [], "files_changed": [], "diff": ""}
             systems = handgriff.load_registry(str(vault))
             pages_before = handgriff.list_pages(str(vault))
+            prior = handgriff.pages_from_session(str(vault), spec.session_id)
             topics = analyzer.analyze_session(
                 session_data,
                 brain.load_existing_tags(str(vault)),
@@ -248,8 +250,28 @@ def run_miner(
                 model,
                 systems=systems,
                 handbuch_pages=pages_before,
+                session_handgriffe=prior,
             )
             handgriff_topics = [topic for topic in topics if isinstance(topic, dict) and topic.get("type") == "handgriff"]
+            if not handgriff_topics and prior:
+                counters["analyzer_retry"] += 1
+                logger.info(
+                    "session %s: analyzer retry (0 handgriffe, %s frühere Seiten)",
+                    spec.session_id,
+                    len(prior),
+                )
+                topics = analyzer.analyze_session(
+                    session_data,
+                    brain.load_existing_tags(str(vault)),
+                    brain.load_existing_wings(str(vault)),
+                    model,
+                    systems=systems,
+                    handbuch_pages=pages_before,
+                    session_handgriffe=prior,
+                )
+                handgriff_topics = [
+                    topic for topic in topics if isinstance(topic, dict) and topic.get("type") == "handgriff"
+                ]
             summary = _topic_summary(topics)
             logger.info("session %s: analyzer topics %s", spec.session_id, summary)
             quarantined: list[str] = []
@@ -298,7 +320,8 @@ def run_miner(
         f"Miner: {counters['sessions']} Sessions, {counters['done']} done, "
         f"{counters['error']} error, {counters['missing']} missing, "
         f"{counters['pages']} Seiten geschrieben/überarbeitet, "
-        f"Belege {counters['belegt']}/{counters['beleg_total']}"
+        f"Belege {counters['belegt']}/{counters['beleg_total']}, "
+        f"Analyzer-Wiederholungen {counters['analyzer_retry']}"
     )
     return counters
 

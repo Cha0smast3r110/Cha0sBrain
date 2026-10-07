@@ -99,6 +99,32 @@ def list_pages(vault_path: str) -> dict[str, list[str]]:
     return pages
 
 
+def pages_from_session(vault_path: str, session_id: str) -> list[dict]:
+    """Return handgriff pages whose frontmatter cites the given session."""
+    root = Path(vault_path) / HANDBUCH_WING
+    session_ref = f"session {str(session_id)[:8]}"
+    pages: list[dict] = []
+    try:
+        files = sorted(root.glob("*/*.md"))
+    except OSError:
+        return []
+    for path in files:
+        if path.name.startswith("_"):
+            continue
+        try:
+            import vaultlib
+
+            fm = vaultlib.parse_typed_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if session_ref not in [str(q) for q in _as_list((fm or {}).get("quellen"))]:
+            continue
+        aufgabe = str((fm or {}).get("aufgabe") or "").strip()
+        if aufgabe:
+            pages.append({"system": path.parent.name, "aufgabe": aufgabe, "path": path})
+    return pages
+
+
 def page_path(vault_path: str, system: str, aufgabe: str) -> Path:
     return Path(vault_path) / HANDBUCH_WING / slugify(system) / f"{slugify(aufgabe)}.md"
 

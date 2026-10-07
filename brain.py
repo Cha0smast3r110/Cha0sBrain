@@ -158,6 +158,15 @@ def _path_for_ref(vault_path: str, ref: str) -> "Path | None":
     return Path(vault_path, wing, slug + ".md")
 
 
+def _ref_for_path(vault_path: str, path: "Path") -> str:
+    """Return the vault ref for a markdown path, without the .md suffix."""
+    try:
+        rel = path.relative_to(vault_path)
+    except ValueError:
+        rel = path
+    return rel.with_suffix("").as_posix()
+
+
 def _replace_seen_sessions(content: str, new_value: int) -> str | None:
     lines = content.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
@@ -230,6 +239,10 @@ def dedup_written_entries(write_result, vault_path: str, logger) -> None:
             return  # kein Vergleichsbestand => nichts deduplizieren
         kept = []
         for path in written:
+            ref = _ref_for_path(vault_path, path)
+            if ref.startswith("handbuch/"):
+                kept.append(path)
+                continue
             text = _entry_embed_text(path)
             if not text:
                 kept.append(path)
@@ -240,8 +253,9 @@ def dedup_written_entries(write_result, vault_path: str, logger) -> None:
                 kept.append(path)  # Embed-Server aus => behalten
                 continue
             threshold = CARD_MERGE_THRESHOLD if is_card else NEAR_DUPLICATE_THRESHOLD
+            candidates = {k: v for k, v in existing.items() if k != ref}
             neighbors = semantic.semantic_neighbors(
-                vec, existing, top_k=1, min_sim=threshold
+                vec, candidates, top_k=1, min_sim=threshold
             )
             if neighbors:
                 dup_ref, sim = next(iter(neighbors.items()))

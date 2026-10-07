@@ -184,3 +184,40 @@ def test_dedup_legacy_entries_still_remove_without_merging(tmp_path: Path, monke
     assert result.written == []
     assert not new.exists()
     assert "seen_sessions" not in existing.read_text(encoding="utf-8")
+
+
+def test_dedup_never_matches_own_ref(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "v"
+    (vault / "automation").mkdir(parents=True)
+    own = vault / "automation" / "daily-workflow.md"
+    own.write_text("---\ntype: anleitung\n---\n# Daily\n", encoding="utf-8")
+    monkeypatch.setattr(
+        semantic,
+        "load_embeddings",
+        lambda vault_path: {"automation/daily-workflow": {"vec": [1.0, 0.0], "hash": "x"}},
+    )
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: [1.0, 0.0])
+    result = SimpleNamespace(written=[own])
+
+    brain.dedup_written_entries(result, str(vault), _Logger())
+
+    assert own.exists() and result.written == [own]
+
+
+def test_dedup_skips_handbuch_pages(tmp_path: Path, monkeypatch):
+    vault = tmp_path / "v"
+    page_dir = vault / "handbuch" / "beispiel-crm"
+    page_dir.mkdir(parents=True)
+    page = page_dir / "benutzer-anlegen.md"
+    page.write_text("---\ntype: handgriff\n---\n# B\n", encoding="utf-8")
+    monkeypatch.setattr(
+        semantic,
+        "load_embeddings",
+        lambda vault_path: {"devtools/other": {"vec": [1.0, 0.0], "hash": "x"}},
+    )
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: [1.0, 0.0])
+    result = SimpleNamespace(written=[page])
+
+    brain.dedup_written_entries(result, str(vault), _Logger())
+
+    assert page.exists() and result.written == [page]

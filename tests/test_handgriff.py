@@ -413,3 +413,11 @@ def test_find_secret_without_or_with_broken_config(tmp_path, monkeypatch):
     broken.write_text("{kaputt", encoding="utf-8")
     monkeypatch.setattr(handgriff, "CONFIG_PATH", broken)
     assert handgriff.find_secret("an max@eigene-firma.de") is not None
+
+
+def test_find_secret_ignores_noreply_variants():
+    import handgriff
+
+    assert handgriff.find_secret("von forwarding-noreply@beispiel-dienst.de") is None
+    assert handgriff.find_secret("von alerts.no-reply@beispiel-dienst.de") is None
+    assert handgriff.find_secret("von noreplyer.max@beispiel-firma.de") is not None

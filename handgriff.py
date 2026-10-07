@@ -457,6 +457,8 @@ def find_secret(text: str) -> str | None:
         local = match.group(0).split("@", 1)[0].casefold()
         if local in _ROLE_EMAIL_LOCAL_PARTS:
             continue
+        if re.search(r"(?:^|[._-])(?:no-?reply|do-?not-?reply)$", local):
+            continue
         if match.group(0).casefold() in allowed_emails:
             continue
         email_domain = match.group(1).casefold()

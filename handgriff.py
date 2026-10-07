@@ -5,15 +5,13 @@ import json
 import re
 import unicodedata
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-import semantic
 from writer import sanitize_tags
 
 HANDBUCH_WING = "handbuch"
 REGISTRY_FILE = "handbuch/_systeme.json"
 STATUS_VALUES = ("bestätigt", "ungeprüft", "prüfen")
-MATCH_THRESHOLD = 0.85  # [ANNAHME] Cosine für "gleiche Aufgabe"; in Task 2.7 nachmessen.
 
 _UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"})
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -103,49 +101,10 @@ def page_path(vault_path: str, system: str, aufgabe: str) -> Path:
     return Path(vault_path) / HANDBUCH_WING / slugify(system) / f"{slugify(aufgabe)}.md"
 
 
-def _path_from_ref(vault_path: str, ref: str) -> Path:
-    return Path(vault_path) / f"{ref}.md"
-
-
-def find_existing_page(
-    vault_path: str,
-    system: str,
-    aufgabe: str,
-    *,
-    embeddings: dict | None = None,
-    embed_fn: Callable[..., list[float] | None] | None = None,
-) -> Path | None:
-    """Find an exact or semantic existing handgriff page for the same system."""
+def find_existing_page(vault_path: str, system: str, aufgabe: str) -> Path | None:
+    """Find only the exact page path; embeddings merged opposite short tasks in the 2026-10-07 measurement."""
     exact = page_path(vault_path, system, aufgabe)
-    if exact.exists():
-        return exact
-
-    if embeddings is None:
-        embeddings = semantic.load_embeddings(vault_path)
-    if embed_fn is None:
-        embed_fn = semantic.embed_text
-    try:
-        qvec = embed_fn(str(aufgabe or ""), prefix="query: ")
-    except Exception:
-        return None
-    if not qvec or not embeddings:
-        return None
-
-    prefix = f"{HANDBUCH_WING}/{slugify(system)}/"
-    best_ref = None
-    best_sim = MATCH_THRESHOLD
-    for ref, rec in embeddings.items():
-        if not str(ref).startswith(prefix):
-            continue
-        vec = rec.get("vec") if isinstance(rec, dict) else None
-        sim = semantic.cosine(qvec, vec) if vec else 0.0
-        if sim >= best_sim:
-            best_ref = ref
-            best_sim = sim
-    if not best_ref:
-        return None
-    path = _path_from_ref(vault_path, best_ref)
-    return path if path.exists() else None
+    return exact if exact.exists() else None
 
 
 def _as_list(value: Any) -> list:

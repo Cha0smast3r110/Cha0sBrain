@@ -31,32 +31,22 @@ def test_find_existing_exact_path(tmp_path):
     assert h.find_existing_page(str(tmp_path), "beispiel-crm", "Benutzer anlegen") == p
 
 
-def test_find_existing_by_embedding_same_system_only(tmp_path):
-    p = h.page_path(str(tmp_path), "beispiel-crm", "Benutzer anlegen")
+def test_find_existing_ignores_semantic_match_for_other_task(tmp_path, monkeypatch):
+    p = h.page_path(str(tmp_path), "beispiel-crm", "Benutzer löschen")
     p.parent.mkdir(parents=True)
     p.write_text("x", encoding="utf-8")
-    emb = {
-        "handbuch/beispiel-crm/benutzer-anlegen": {"vec": [1.0, 0.0]},
-        "handbuch/anderes-system/teammitglied-anlegen": {"vec": [1.0, 0.0]},
-    }
-    found = h.find_existing_page(
-        str(tmp_path),
-        "beispiel-crm",
-        "Teammitglied anlegen",
-        embeddings=emb,
-        embed_fn=lambda t, **k: [1.0, 0.0],
+
+    import semantic
+
+    monkeypatch.setattr(
+        semantic,
+        "load_embeddings",
+        lambda vault_path: {"handbuch/beispiel-crm/benutzer-loeschen": {"vec": [1.0]}},
     )
-    assert found == p
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: [1.0])
+    monkeypatch.setattr(semantic, "cosine", lambda qvec, vec: 0.99)
 
-
-def test_find_existing_offline_returns_none(tmp_path):
-    assert h.find_existing_page(
-        str(tmp_path),
-        "s",
-        "a",
-        embeddings={"handbuch/s/b": {"vec": [1.0]}},
-        embed_fn=lambda t, **k: None,
-    ) is None
+    assert h.find_existing_page(str(tmp_path), "beispiel-crm", "Benutzer anlegen") is None
 
 
 def test_merge_never_downgrades_confirmed():

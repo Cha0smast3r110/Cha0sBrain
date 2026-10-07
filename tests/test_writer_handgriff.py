@@ -422,3 +422,57 @@ def test_anleitung_writer_does_not_call_beleg_apply(vault, logs_dir, monkeypatch
     result = writer.write_entries([topic], session, str(vault), "s1", "2026-10-08", "haiku", emit_docs_solutions=False)
 
     assert result.written == [vault / "devtools" / "cli-nutzen.md"]
+
+
+
+def test_handgriff_model_overrides_model_only_for_handgriff(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    anleitung = {
+        "type": "anleitung",
+        "title": "CLI nutzen",
+        "slug": "cli-nutzen",
+        "wing": "devtools",
+        "project": "example-app",
+        "tags": ["cli"],
+        "difficulty": "beginner",
+        "summary": "Eine Anleitung",
+        "relevant_conversation": [0],
+        "relevant_tool_calls": [],
+    }
+    session = _session()
+    seen: list[str] = []
+
+    def fake_call(_system, user, model):
+        seen.append(model)
+        if "CLI nutzen" in user:
+            return "# CLI nutzen\n\n## Worum geht es?\n" + ("x" * 220) + "\n\n## Problemstellung\n" + ("x" * 220) + "\n\n## Hintergrundwissen\n" + ("x" * 220) + "\n\n## Lösung\n" + ("x" * 220) + "\n\n## Cheatsheet\n" + ("x" * 220)
+        return _valid_handgriff_body()
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", fake_call)
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+
+    writer.write_entries([_topic(), anleitung], session, str(vault), "s1", "2026-10-08", "haiku", handgriff_model="sonnet", emit_docs_solutions=False)
+
+    assert seen == ["sonnet", "haiku"]
+
+
+def test_fresh_handgriff_omits_old_body_but_keeps_confirmed_status(vault, logs_dir, monkeypatch):
+    import semantic
+    import writer
+
+    monkeypatch.setenv("CHA0SBRAIN_LOG_DIR", str(logs_dir))
+    monkeypatch.setattr(writer, "call_claude", lambda system, user, model: _valid_handgriff_body() if not prompts.append(user) else _valid_handgriff_body())
+    monkeypatch.setattr(semantic, "embed_text", lambda text, **kwargs: None)
+    prompts: list[str] = []
+
+    writer.write_entries([_topic(bestaetigt=True)], _session(), str(vault), "s1", "2026-10-07", "haiku")
+    page = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    page.write_text(page.read_text(encoding="utf-8") + "\nALTER BODY SATZ DARF NICHT INS PROMPT\n", encoding="utf-8")
+
+    writer.write_entries([_topic(bestaetigt=False)], _session(), str(vault), "s2", "2026-10-08", "haiku", fresh_handgriff=True)
+
+    assert "ALTER BODY SATZ DARF NICHT INS PROMPT" not in prompts[-1]
+    assert _fm(page)["status"] == "bestätigt"

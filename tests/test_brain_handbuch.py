@@ -113,3 +113,26 @@ def test_process_session_records_lines_when_no_topics(tmp_path, monkeypatch):
     brain.process_session("s1", "", cfg, logging.getLogger("t"), session_file=_jsonl(tmp_path, lines))
     rec = brain.load_processed_sessions()["s1"]
     assert rec["lines"] == 3
+
+
+
+def test_process_session_passes_handgriff_model_to_writer(tmp_path, monkeypatch):
+    monkeypatch.setattr(brain, "PROCESSED_SESSIONS_FILE", tmp_path / "processed.json")
+    monkeypatch.setattr(brain, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(brain, "collect_git_changes", lambda d, t: {"commits": [], "files_changed": [], "diff": ""})
+    monkeypatch.setattr(brain, "has_handgriff_signal", lambda session_data: True)
+    monkeypatch.setattr(brain, "analyze_session", lambda *a, **k: [{"type": "handgriff", "title": "Handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen", "wing": "handbuch", "slug": "benutzer-anlegen", "project": "example-app"}])
+    monkeypatch.setattr(brain, "update_indexes", lambda vault_path: None)
+    seen = {}
+
+    def fake_write(*args, **kwargs):
+        seen.update(kwargs)
+        return type("R", (), {"written": [], "docs_solutions_emitted": [], "stylecheck_retries": 0, "quarantined": [], "refusals": []})()
+
+    monkeypatch.setattr(brain, "write_entries", fake_write)
+    lines = [_user("wie lege ich einen benutzer im beispiel-crm an?"), _assistant("1. Studio öffnen")]
+    cfg = {"vault_path": str(tmp_path / "vault"), "handgriff_model": "sonnet"}
+
+    brain.process_session("s1", "", cfg, logging.getLogger("t"), session_file=_jsonl(tmp_path, lines))
+
+    assert seen["handgriff_model"] == "sonnet"

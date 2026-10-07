@@ -186,6 +186,8 @@ def run_miner(
     dry_run: bool = False,
     state_path: Path | str | None = None,
     vault_path: Path | str | None = None,
+    fresh: bool = False,
+    redo: bool = False,
 ) -> dict[str, Any]:
     """Run the handbuch miner and return counters for tests/CLI."""
     _setup_logging()
@@ -212,13 +214,15 @@ def run_miner(
         "missing": 0,
         "pages": 0,
         "skipped_done": 0,
+        "belegt": 0,
+        "beleg_total": 0,
     }
     any_written = False
     os.environ["CHA0SBRAIN_RUNNING"] = "1"
 
     for spec in specs:
         old = state.get(spec.session_id, {}) if not dry_run else {}
-        if old.get("status") == "done":
+        if old.get("status") == "done" and not redo:
             counters["skipped_done"] += 1
             logger.info("skip done session %s", spec.session_id)
             continue
@@ -249,6 +253,7 @@ def run_miner(
             summary = _topic_summary(topics)
             logger.info("session %s: analyzer topics %s", spec.session_id, summary)
             quarantined: list[str] = []
+            beleg_records: list[dict[str, Any]] = []
             if dry_run:
                 for topic in handgriff_topics:
                     print(f"{spec.session_id}: {topic.get('system')} / {topic.get('aufgabe')}")
@@ -261,9 +266,14 @@ def run_miner(
                     spec.session_id,
                     str(session_data.get("timestamp") or "")[:10],
                     model,
+                    handgriff_model=cfg.get("handgriff_model"),
+                    fresh_handgriff=fresh,
                 )
                 written_pages = [Path(path) for path in result.written]
                 quarantined = [str(path) for path in getattr(result, "quarantined", []) or []]
+                beleg_records = list(getattr(result, "beleg", []) or [])
+                counters["belegt"] += sum(int(rec.get("belegt") or 0) for rec in beleg_records if isinstance(rec, dict))
+                counters["beleg_total"] += sum(int(rec.get("total") or 0) for rec in beleg_records if isinstance(rec, dict))
                 if quarantined:
                     logger.warning("session %s: quarantined %s", spec.session_id, quarantined)
                 if written_pages:
@@ -272,7 +282,7 @@ def run_miner(
             counters["pages"] += len(written_pages)
             if not dry_run:
                 state[spec.session_id] = {"status": "done", "pages": _rel_pages(written_pages, vault), "at": _now_iso(), "error": None,
-                                          "topics": summary, "quarantined": quarantined}
+                                          "topics": summary, "quarantined": quarantined, "beleg": beleg_records}
                 _write_state(state_file, state)
         except Exception as exc:  # session-local failure must not abort the run
             counters["error"] += 1
@@ -287,7 +297,8 @@ def run_miner(
     print(
         f"Miner: {counters['sessions']} Sessions, {counters['done']} done, "
         f"{counters['error']} error, {counters['missing']} missing, "
-        f"{counters['pages']} Seiten geschrieben/überarbeitet"
+        f"{counters['pages']} Seiten geschrieben/überarbeitet, "
+        f"Belege {counters['belegt']}/{counters['beleg_total']}"
     )
     return counters
 
@@ -301,6 +312,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--only", action="append", default=[])
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--fresh", action="store_true", help="Bestehende Handgriff-Seiten ohne alten Body neu schreiben")
+    parser.add_argument("--redo", action="store_true", help="Bereits als done markierte Sessions erneut verarbeiten")
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     parser.add_argument("--vault", type=Path, default=None)
     return parser
@@ -318,6 +331,8 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         state_path=args.state,
         vault_path=args.vault,
+        fresh=args.fresh,
+        redo=args.redo,
     )
     return 0
 

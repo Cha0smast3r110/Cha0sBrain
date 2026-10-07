@@ -552,6 +552,7 @@ def process_session(
     write_result = write_entries(
         topics, session_data, vault_path, session_id, date, model,
         emit_docs_solutions=emit_docs_solutions,
+        handgriff_model=config.get("handgriff_model"),
     )
     logger.info(f"Written {len(write_result.written)} entries")
 

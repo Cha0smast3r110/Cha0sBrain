@@ -200,6 +200,7 @@ All configuration lives in `config.json` (git-ignored — copy it from
 |---|---|---|
 | `vault_path` | **Absolute path** to your Obsidian vault. Wing folders and index files are created under here. Notes themselves are never committed to this repo. | — (required) |
 | `model` | Which `claude` CLI model the analyzer/writer use. `haiku` is the cheap, fast default. | `haiku` |
+| `handgriff_model` | Optional model override only for handbuch handgriff pages, e.g. `"sonnet"`. | unset |
 | `log_level` | Python log level for `logs/brain.log`. | `INFO` |
 | `push_vault_to_remote` | If `true`, the vault is `git push`ed after each run (useful when the vault is its own synced repo). | `true` |
 | `emit_docs_solutions` | If `true`, troubleshooting entries are also emitted as `docs/solutions/…` files in the *project* being worked on. | `false` |

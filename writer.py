@@ -545,6 +545,8 @@ def write_entries(
     date: str,
     model: str,
     emit_docs_solutions: bool = True,
+    handgriff_model: str | None = None,
+    fresh_handgriff: bool = False,
 ) -> WriteResult:
     """Generate and write markdown files for each topic.
 
@@ -595,6 +597,8 @@ def write_entries(
                 parts = raw_existing_content.split("---", 2)
                 if len(parts) >= 3:
                     existing_content = parts[2].strip()
+            if entry_type == "handgriff" and fresh_handgriff:
+                existing_content = None
             logger.info(f"Updating existing entry: {output_path}")
 
         template_file = TYPE_TEMPLATES.get(entry_type, "anleitung.md")
@@ -648,7 +652,8 @@ def write_entries(
                     )
 
             try:
-                raw_response = call_claude(system_prompt, user_prompt, model)
+                call_model = handgriff_model if entry_type == "handgriff" and handgriff_model else model
+                raw_response = call_claude(system_prompt, user_prompt, call_model)
             except Exception as e:
                 logger.error(
                     f"call_claude failed for '{topic['title']}' (attempt {attempt}): {e}"

@@ -8,6 +8,19 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 import handbuch_miner  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _tmp_log(tmp_path, monkeypatch):
+    """Tests duerfen nie ins echte Miner-Log schreiben."""
+    monkeypatch.setattr(handbuch_miner, "LOG_PATH", tmp_path / "miner.log")
+    for handler in list(handbuch_miner.logger.handlers):
+        handbuch_miner.logger.removeHandler(handler)
+    yield
+    for handler in list(handbuch_miner.logger.handlers):
+        handbuch_miner.logger.removeHandler(handler)
+        handler.close()
 
 
 def _session_file(root: Path, session_id: str) -> Path:
@@ -233,3 +246,34 @@ def test_processed_sessions_state_is_not_touched(tmp_path, monkeypatch):
     result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
 
     assert result["done"] == 1
+
+
+def test_state_records_analyzer_topics_and_quarantine(tmp_path, monkeypatch):
+    """Ohne Seite muss nachvollziehbar sein, was der Analyzer geliefert hat."""
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda *args, **kwargs: [
+            {"type": "anleitung", "title": "Tutorial"},
+            {"type": "handgriff", "title": "Handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"},
+        ],
+    )
+    monkeypatch.setattr(
+        handbuch_miner.writer,
+        "write_entries",
+        lambda topics, *_a, **_k: SimpleNamespace(written=[], quarantined=["_quarantine/benutzer-anlegen.md"]),
+    )
+
+    handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+
+    rec = json.loads(state.read_text(encoding="utf-8"))["s1"]
+    assert rec["topics"] == ["anleitung: Tutorial", "handgriff: beispiel-crm / Benutzer anlegen"]
+    assert rec["quarantined"] == ["_quarantine/benutzer-anlegen.md"]
+    assert (tmp_path / "miner.log").exists()

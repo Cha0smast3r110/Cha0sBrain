@@ -143,6 +143,18 @@ def _write_state(path: Path, state: dict[str, dict[str, Any]]) -> None:
     os.replace(tmp, path)
 
 
+def _topic_summary(topics: list[Any]) -> list[str]:
+    out = []
+    for topic in topics or []:
+        if not isinstance(topic, dict):
+            continue
+        if topic.get("type") == "handgriff":
+            out.append(f"handgriff: {topic.get('system')} / {topic.get('aufgabe')}")
+        else:
+            out.append(f"{topic.get('type')}: {topic.get('title')}")
+    return out
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -234,6 +246,9 @@ def run_miner(
                 handbuch_pages=pages_before,
             )
             handgriff_topics = [topic for topic in topics if isinstance(topic, dict) and topic.get("type") == "handgriff"]
+            summary = _topic_summary(topics)
+            logger.info("session %s: analyzer topics %s", spec.session_id, summary)
+            quarantined: list[str] = []
             if dry_run:
                 for topic in handgriff_topics:
                     print(f"{spec.session_id}: {topic.get('system')} / {topic.get('aufgabe')}")
@@ -248,12 +263,16 @@ def run_miner(
                     model,
                 )
                 written_pages = [Path(path) for path in result.written]
+                quarantined = [str(path) for path in getattr(result, "quarantined", []) or []]
+                if quarantined:
+                    logger.warning("session %s: quarantined %s", spec.session_id, quarantined)
                 if written_pages:
                     any_written = True
             counters["done"] += 1
             counters["pages"] += len(written_pages)
             if not dry_run:
-                state[spec.session_id] = {"status": "done", "pages": _rel_pages(written_pages, vault), "at": _now_iso(), "error": None}
+                state[spec.session_id] = {"status": "done", "pages": _rel_pages(written_pages, vault), "at": _now_iso(), "error": None,
+                                          "topics": summary, "quarantined": quarantined}
                 _write_state(state_file, state)
         except Exception as exc:  # session-local failure must not abort the run
             counters["error"] += 1

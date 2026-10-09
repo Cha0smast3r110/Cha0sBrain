@@ -19,7 +19,8 @@ S4b (Kriterien relativ zu LFM-live, Regeln siehe S4B_REGELN weiter unten):
   auswertung [--key K]                     Tabelle, vorab festgelegte Auswahl, Bootstrap-KI p95-Differenz
   census     --texts FILE.jsonl            Token-Zählung aller Live-Eingaben (Gemma- und LFM-Tokenizer)
   ub         --long-texts FILE             Aggregator: -ub 4096/2048/1024/512, RAM, Durchsatz, Puffer-Log, cos
-  gate-s4b   --gem-threads N --gem-ub X    neue relative Kriterien, Exit 0 = grün, 1 = rot
+  ursache    --long-texts FILE             RSS-Verlauf je Anfrage, Varianten (cache-ram 0, -fa off, glibc-Arenen)
+  gate-s4b   --gem-threads N --gem-ub X [--teil hook|agg]   neue relative Kriterien, Exit 0 = grün, 1 = rot
 """
 import argparse, base64, json, os, random, statistics as st, subprocess, threading, time
 import urllib.error, urllib.request
@@ -50,6 +51,7 @@ CONFIGS = {
     "gem8192mm": (11519, EG2_BIN, GEMMA_MODEL, ["-c", "8192", "-ngl", "0", "--threads", "4", "--mmproj", str(MMPROJ),
                                                  "--image-max-tokens", "70", "--video-fps", "0.5"]),
 }
+CONFIG_ENV = {}  # name -> zusätzliche Umgebungsvariablen (nur S4b-Ursachentest)
 PREFIX_Q = {"lfm": "query: ", "gem": "task: search result | query: "}
 PREFIX_D = {"lfm": "document: ", "gem": "title: none | text: "}
 # Automatiklauf-Units, die die Startbedingung blockieren: privat, daher nicht im Repo.
@@ -128,7 +130,8 @@ class Server:
     def __enter__(self):
         OUT.mkdir(exist_ok=True)
         log = open(OUT / f"{self.name}.log", "w")
-        self.p = subprocess.Popen(self.cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        env = {**os.environ, **CONFIG_ENV.get(self.name, {})}
+        self.p = subprocess.Popen(self.cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=env)
         self.pid = self.p.pid  # nice exec't den Server, PID bleibt
         self.pidfile.write_text(str(self.pid))
         for _ in range(600):
@@ -431,6 +434,8 @@ def hook_flags(threads):
 
 def agg_flags(ub):
     fl = list(AGG); fl[fl.index("-ub") + 1] = str(ub)
+    if ub > 4096:  # mehr Token als -c/-b 4096 brauchen auch einen größeren Kontext und Batch
+        fl[fl.index("-c") + 1] = str(ub); fl[fl.index("-b") + 1] = str(ub)
     return fl + ["-lv", "4"]  # -lv 4 nur für die Puffer-Logzeilen, ändert nichts an der Rechnung
 
 
@@ -608,16 +613,20 @@ def cmd_ub(a):
     data = json.loads(Path(a.long_texts).read_text())
     rng = random.Random(a.seed)
     ubs = ints(a.ubs)
-    if ubs[0] != 4096:
-        raise SystemExit("erster Block muss -ub 4096 sein (Referenzvektoren)")
+    reff = OUT / "s4b_ref_vecs.json"  # Referenzvektoren -ub 4096 (lokal, gitignored)
     ref = {}  # (modell, klasse) -> Vektoren von -ub 4096
-    res = {"regeln": S4B_REGELN, "seed": a.seed, "n": a.n, "warmup": a.warmup, "bloecke": {}}
+    if ubs[0] != 4096:
+        if not reff.exists():
+            raise SystemExit("erster Block muss -ub 4096 sein oder s4/s4b_ref_vecs.json existieren")
+        ref = {tuple(k.split("|")): v for k, v in json.loads(reff.read_text()).items()}
+    alt = json.loads(RESULTS.read_text()).get(a.key) if RESULTS.exists() and a.anhaengen else None
+    res = alt or {"regeln": S4B_REGELN, "seed": a.seed, "n": a.n, "warmup": a.warmup, "bloecke": {}}
     port = 11510
     for bi, ub in enumerate(ubs):
         blk = {"start": pruefe(f"ub {ub}")}
         names = [register("lfm_ub4096", port, LFM_BIN, LFM_MODEL, agg_flags(4096))]
         names.append(register(f"gem_ub{ub}", port + 1, EG2_BIN, GEMMA_MODEL, agg_flags(ub)))
-        if ub != 4096:
+        if ub != 4096 and not a.ohne_lfm_x:
             names.append(register(f"lfm_ub{ub}", port + 2, LFM_BIN, LFM_MODEL, agg_flags(ub)))
         port += 3
         with ExitStack() as es:
@@ -652,6 +661,7 @@ def cmd_ub(a):
                     m = s.name[:3]
                     if ub == 4096 and s.name.endswith("4096") and (m, klasse) not in ref:
                         ref[(m, klasse)] = vecs[s.name]
+                        reff.write_text(json.dumps({"|".join(k): v for k, v in ref.items()}))
                     cs = [cos(v, r) for v, r in zip(vecs[s.name], ref.get((m, klasse), [])) if v and r]
                     blk[s.name][klasse] = {
                         **(stats(ms[s.name]) if ms[s.name] else {"n": 0}),
@@ -675,6 +685,54 @@ def cmd_ub(a):
         speichere(a.key, res)
 
 
+def rss_detail(pid):
+    d = {}
+    for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+        if line.startswith(("VmHWM", "VmRSS", "RssAnon", "RssFile")):
+            k, v = line.split(":")
+            d[k] = round(int(v.split()[0]) / 1024, 1)
+    return d
+
+
+URSACHE_VARIANTEN = {  # name -> (zusätzliche Flags, Umgebung)
+    "basis": ([], {}),
+    "cache0": (["--cache-ram", "0"], {}),
+    "faoff": (["-fa", "off"], {}),
+    "arena2": ([], {"MALLOC_ARENA_MAX": "2"}),
+}
+
+
+def cmd_ursache(a):
+    """Gemma (und LFM) mit Aggregator-Flags -ub X, je Variante ein einzelner Server, die langen Texte
+    nacheinander; RSS nach jeder Anfrage. Wächst der Speicher mit der Zahl der Anfragen, ist es
+    Halten/Fragmentierung; springt er beim ersten langen Text, ist es Puffer-Bedarf."""
+    data = json.loads(Path(a.long_texts).read_text())
+    texts = data["2000"][: a.n] + data["8000"][: a.n]
+    res = {"n_je_klasse": a.n, "ub": a.ub}
+    port = 11525
+    for modell in a.modelle.split(","):
+        for var in a.varianten.split(","):
+            fl, env = URSACHE_VARIANTEN[var]
+            name = register(f"{modell}_ur_{var}", port, LFM_BIN if modell == "lfm" else EG2_BIN,
+                            LFM_MODEL if modell == "lfm" else GEMMA_MODEL, agg_flags(a.ub) + fl)
+            CONFIG_ENV[name] = env
+            port += 1
+            pruefe(f"ursache {name}")
+            with Server(name) as s:
+                r = {"flags": CONFIGS[name][3], "env": env, "puffer_log": puffer_zeilen(name),
+                     "rss_nach_laden": rss_detail(s.pid), "verlauf_mb": [], "fehler": 0}
+                for i, t in enumerate(texts):
+                    if i % 10 == 0:
+                        pruefe(f"ursache {name} #{i}")
+                    ms, ok = s.embed(PREFIX_D[modell] + t, timeout=120)
+                    r["fehler"] += (not ok)
+                    r["verlauf_mb"].append(rss_detail(s.pid)["VmRSS"])
+                r["rss_ende"] = rss_detail(s.pid)
+                print(name, json.dumps({k: v for k, v in r.items() if k not in ("puffer_log", "flags")}), flush=True)
+                res[name] = r
+    speichere(a.key, res)
+
+
 def cmd_gate_s4b(a):
     r = json.loads(Path(a.results).read_text())
     checks = []
@@ -696,6 +754,21 @@ def cmd_gate_s4b(a):
     checks.append((f"Hook: {gk} ohne Fehler/Timeouts ({fe})", fe == 0))
     g, l = h["rss_nach_last"][gk]["VmHWM"], h["rss_nach_last"]["lfm_t4"]["VmHWM"]
     checks.append((f"RAM Hook: {gk} VmHWM {g} <= LFM-live {l} + {a.ram_budget_mb} MB", g <= l + a.ram_budget_mb))
+    if a.teil == "hook":
+        checks = checks
+    else:
+        checks += gate_agg(r, a)
+    if a.teil == "agg":
+        checks = gate_agg(r, a)
+    ok = all(c for _, c in checks)
+    for txt, c in checks:
+        print(("GRÜN " if c else "ROT  ") + txt)
+    print("GESAMT", f"({a.teil})" if a.teil != "alle" else "", "GRÜN" if ok else "ROT")
+    raise SystemExit(0 if ok else 1)
+
+
+def gate_agg(r, a):
+    checks = []
     blk = r["s4b_ub"]["bloecke"][str(a.gem_ub)]
     gu, lu = blk[f"gem_ub{a.gem_ub}"], blk["lfm_ub4096"]
     g, l = gu["rss_nach_last"]["VmHWM"], lu["rss_nach_last"]["VmHWM"]
@@ -711,11 +784,7 @@ def cmd_gate_s4b(a):
                        c is not None and c > 0.999 and gu[k]["cos_zu_ub4096_n"] == gu[k]["n"]))
     tmax = r["s4b_census"]["gem_tok"]["max"]
     checks.append((f"Census: größte Live-Eingabe {tmax} Token (Gemma) <= -ub {a.gem_ub}", tmax <= a.gem_ub))
-    ok = all(c for _, c in checks)
-    for txt, c in checks:
-        print(("GRÜN " if c else "ROT  ") + txt)
-    print("GESAMT", "GRÜN" if ok else "ROT")
-    raise SystemExit(0 if ok else 1)
+    return checks
 
 
 def main():
@@ -758,15 +827,26 @@ def main():
     u.add_argument("--warmup", type=int, default=5)
     u.add_argument("--seed", type=int, default=S4B_SEED)
     u.add_argument("--key", default="s4b_ub")
+    u.add_argument("--anhaengen", action="store_true", help="Blöcke zu vorhandenem Ergebnis hinzufügen")
+    u.add_argument("--ohne-lfm-x", action="store_true", help="LFM mit demselben -ub weglassen (RAM)")
+    r_ = sp.add_parser("ursache")
+    r_.add_argument("--long-texts", required=True)
+    r_.add_argument("--ub", type=int, default=4096)
+    r_.add_argument("--n", type=int, default=15)
+    r_.add_argument("--modelle", default="gem,lfm")
+    r_.add_argument("--varianten", default="basis,cache0,faoff,arena2")
+    r_.add_argument("--key", default="s4b_ursache")
     b = sp.add_parser("gate-s4b")
     b.add_argument("--results", default=str(RESULTS))
     b.add_argument("--gem-threads", type=int, required=True)
     b.add_argument("--gem-ub", type=int, required=True)
     b.add_argument("--hook-key", help="Ergebnis-Schlüssel der Hook-Messung (Standard: Bestätigungslauf)")
     b.add_argument("--ram-budget-mb", type=float, default=100.0)
+    b.add_argument("--teil", choices=("alle", "hook", "agg"), default="alle")
     a = ap.parse_args()
     {"hook": cmd_hook, "agg": cmd_agg, "mm": cmd_mm, "gate": cmd_gate, "threads": cmd_threads,
-     "auswertung": cmd_auswertung, "census": cmd_census, "ub": cmd_ub, "gate-s4b": cmd_gate_s4b}[a.cmd](a)
+     "auswertung": cmd_auswertung, "census": cmd_census, "ub": cmd_ub, "ursache": cmd_ursache,
+     "gate-s4b": cmd_gate_s4b}[a.cmd](a)
 
 
 if __name__ == "__main__":

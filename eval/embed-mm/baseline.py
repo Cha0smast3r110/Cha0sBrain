@@ -13,11 +13,12 @@ def emb(t):
 
 
 what = sys.argv[1]
+V = "v" if sys.argv[2:] == ["--video"] else ""
 if what == "docs":
-    c = json.load(open("corpus_img.json"))
-    json.dump({it["path"]: emb("document: " + it["baseline_text"]) for it in c}, open("emb_base_docs.json", "w"))
+    c = json.load(open("vcorpus.json" if V else "corpus_img.json"))
+    json.dump({it["path"]: emb("document: " + it["baseline_text"]) for it in c}, open(f"emb_{V}base_docs.json", "w"))
     print("docs", len(c))
 else:
-    q = json.load(open("queries.json"))
-    json.dump({x["id"]: emb("query: " + x["text"]) for x in q}, open("emb_base_queries.json", "w"))
+    q = json.load(open(f"{V}queries.json"))
+    json.dump({x["id"]: emb("query: " + x["text"]) for x in q}, open(f"emb_{V}base_queries.json", "w"))
     print("queries", len(q))

@@ -17,27 +17,31 @@ def load(n):
 
 
 def ranks_for(tag):
-    return load(f"ranks_{tag}.json")
+    return load(f"{V}ranks_{tag}.json")
 
 
 cmd, tags = sys.argv[1], sys.argv[2:]
-Q = load("queries.json")
+# Präfix "v" schaltet auf die Video-Dateien (vqueries/vcorpus/vlabels/vranks_ …)
+V = "v" if tags and tags[0] == "--video" else ""
+if V:
+    tags = tags[1:]
+Q = load(f"{V}queries.json")
 if cmd == "rank":
     tag = tags[0]
     if tag == "base":
-        docs, qv = load("emb_base_docs.json"), load("emb_base_queries.json")
+        docs, qv = load(f"emb_{V}base_docs.json"), load(f"emb_{V}base_queries.json")
     else:
         from mmlib import embed_text
-        docs = load(f"emb_{tag}.json")["docs"]
+        docs = load(f"emb_{V}{tag}.json")["docs"] if V else load(f"emb_{tag}.json")["docs"]
         qv = {q["id"]: embed_text(q["text"]) for q in Q}
     R = {}
     for q in Q:
         s = sorted(((p, cos(qv[q["id"]], v)) for p, v in docs.items()), key=lambda t: -t[1])
         R[q["id"]] = [{"path": p, "sim": round(x, 4)} for p, x in s[:20]]
-    json.dump(R, open(f"ranks_{tag}.json", "w"), indent=1)
+    json.dump(R, open(f"{V}ranks_{tag}.json", "w"), indent=1)
     print(tag, "gerankt")
 elif cmd == "pool":
-    L = load("labels.json") if Path("labels.json").exists() else {}
+    L = load(f"{V}labels.json") if Path(f"{V}labels.json").exists() else {}
     pool = {}
     for t in tags:
         for qid, lst in ranks_for(t).items():
@@ -45,10 +49,10 @@ elif cmd == "pool":
                 if x["path"] not in L.get(qid, {}):
                     pool.setdefault(qid, set()).add(x["path"])
     out = [{"id": q["id"], "text": q["text"], "candidates": sorted(pool.get(q["id"], []))} for q in Q]
-    json.dump(out, open("pool.json", "w"), ensure_ascii=False, indent=1)
+    json.dump(out, open(f"{V}pool.json", "w"), ensure_ascii=False, indent=1)
     print("Pool:", sum(len(x["candidates"]) for x in out), "Kandidaten")
 else:
-    L = load("labels.json")
+    L = load(f"{V}labels.json")
 
     def ndcg(refs, lab, k=5):
         d = sum(lab.get(r, 0) / math.log2(i + 2) for i, r in enumerate(refs[:k]))

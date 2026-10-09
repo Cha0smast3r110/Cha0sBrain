@@ -13,9 +13,17 @@ Unterbefehle:
 
 Kriterien (Plan S4, vorab): p95 Hook-Embedding unter Last < 300 ms (Gemma),
 Gemma-Text-Server VmHWM <= LFM-VmHWM + 100 MB bei gleichen Flags (-c 512 und -c 4096).
+
+S4b (Kriterien relativ zu LFM-live, Regeln siehe S4B_REGELN weiter unten):
+  threads    --load-cwd DIR [--vault DIR]  Hook: Gemma --threads 1..4 gegen LFM-live, verschränkt, idle + Last
+  auswertung [--key K]                     Tabelle, vorab festgelegte Auswahl, Bootstrap-KI p95-Differenz
+  census     --texts FILE.jsonl            Token-Zählung aller Live-Eingaben (Gemma- und LFM-Tokenizer)
+  ub         --long-texts FILE             Aggregator: -ub 4096/2048/1024/512, RAM, Durchsatz, Puffer-Log, cos
+  gate-s4b   --gem-threads N --gem-ub X    neue relative Kriterien, Exit 0 = grün, 1 = rot
 """
-import argparse, base64, json, os, statistics as st, subprocess, threading, time
-import urllib.request
+import argparse, base64, json, os, random, statistics as st, subprocess, threading, time
+import urllib.error, urllib.request
+from contextlib import ExitStack
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -147,10 +155,12 @@ class Server:
             self.p.wait()
         self.pidfile.unlink(missing_ok=True)
 
-    def embed(self, content, timeout=5.0):
+    def embed(self, content, timeout=5.0, want_vec=False):
         """Spiegelt semantic.embed_text(): urllib, frische Verbindung, gleiches Parsing.
-        Gibt (ms, ok) zurück; ok=False entspricht dem stillen None im Hook (z. B. Timeout 5 s)."""
+        Gibt (ms, ok) zurück; ok=False entspricht dem stillen None im Hook (z. B. Timeout 5 s).
+        Mit want_vec=True: (ms, ok, vektor, fehlertext)."""
         t0 = time.perf_counter()
+        vec, err = None, None
         try:
             body = json.dumps({"content": content}).encode("utf-8")
             req = urllib.request.Request(self.url + "/embedding", data=body,
@@ -162,9 +172,20 @@ class Server:
             if vec and isinstance(vec[0], list):
                 vec = vec[0]
             ok = isinstance(vec, list) and len(vec) > 0
-        except Exception:
-            ok = False
-        return (time.perf_counter() - t0) * 1000, ok
+        except urllib.error.HTTPError as e:
+            ok, err = False, f"HTTP {e.code}: {e.read()[:240].decode('utf-8', 'replace')}"
+        except Exception as e:
+            ok, err = False, repr(e)[:240]
+        ms = (time.perf_counter() - t0) * 1000
+        return (ms, ok, vec if ok else None, err) if want_vec else (ms, ok)
+
+    def ntok(self, content, add_special=True):
+        """Tokenzahl laut Server-Tokenizer (/tokenize), ohne Inferenz."""
+        body = json.dumps({"content": content, "add_special": add_special}).encode("utf-8")
+        req = urllib.request.Request(self.url + "/tokenize", data=body,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return len(json.loads(resp.read())["tokens"])
 
 
 def stats(ms):
@@ -210,8 +231,9 @@ class Last:
 
 
 # ---------------------------------------------------------------- Messphasen
-def hook_runde(servers, texts, tag):
-    """Abwechselnd je Text an alle Server (Reihenfolge rotiert), damit alle dieselbe Last sehen."""
+def hook_runde(servers, texts, tag, rng=None):
+    """Abwechselnd je Text an alle Server (Reihenfolge rotiert), damit alle dieselbe Last sehen.
+    Mit rng (S4b): Reihenfolge je Text zufällig gemischt (fester Seed), Rohwerte je Text gespeichert."""
     ms = {s.name: [] for s in servers}
     fails = {s.name: 0 for s in servers}
     cpu0 = {s.name: cpu_s(s.pid) for s in servers}
@@ -220,7 +242,10 @@ def hook_runde(servers, texts, tag):
     for i, t in enumerate(texts):
         if i % 25 == 0:
             pruefe(f"{tag} #{i}")
-        order = servers if i % 2 == 0 else list(reversed(servers))
+        if rng is not None:
+            order = list(servers); rng.shuffle(order)
+        else:
+            order = servers if i % 2 == 0 else list(reversed(servers))
         for s in order:
             dt, ok = s.embed(PREFIX_Q[s.name[:3]] + t)
             ms[s.name].append(dt)
@@ -233,6 +258,8 @@ def hook_runde(servers, texts, tag):
         cpu = cpu_s(s.pid) - cpu0[s.name]
         res[s.name] = {**stats(ms[s.name]), "fehler": fails[s.name],
                        "cpu_s": round(cpu, 2), "cpu_ms_pro_anfrage": round(cpu * 1000 / len(texts), 1)}
+        if rng is not None:
+            res[s.name]["roh_ms"] = [round(x, 1) for x in ms[s.name]]
     return res
 
 
@@ -362,6 +389,335 @@ def cmd_gate(a):
     raise SystemExit(0 if ok else 1)
 
 
+# ================================================================ S4b
+S4B_REGELN = """S4b, VORAB festgelegt am 2026-10-09 vor der ersten S4b-Messung (Maxims Entscheidung nach S4):
+1. Hook-Latenz relativ: Gemma darf unter vitest-Last nicht schlechter sein als LFM in der
+   Live-Konfiguration (-c 512, --threads 4, CLS, nice 10): p95(Gemma) <= p95(LFM-live) UND
+   max(Gemma) <= max(LFM-live), in derselben Sitzung, verschränkt gemessen. Keine Fehler/Timeouts.
+2. Timeout-Reserve: Hook-Timeout ist 5 s (semantic.embed_text(timeout=5.0) und der 5-s-Timeout
+   des UserPromptSubmit-Hooks, der den ganzen Prozess umfasst). Gemma-max unter Last plus
+   Hook-Overhead ohne Embedding (p95 unter Last: Python-Start, Import, load_embeddings,
+   semantic_neighbors) muss <= 4000 ms bleiben, also >= 1 s Abstand zum Timeout.
+3. Auswahl der Thread-Zahl (aus 1, 2, 3, 4): kleinstes p95 unter Last. Liegen mehrere innerhalb
+   5 % des besten p95, gewinnt davon das kleinste idle-p95; liegen auch diese innerhalb 5 %,
+   die kleinere Thread-Zahl. Weil Auswahl und Test sonst auf denselben Daten liefen, entscheidet
+   ein zweiter, unabhängiger Lauf (frische Server, anderer Seed, nur LFM-live + gewählte Gemma).
+4. Bootstrap-95%-KI für p95(Gemma gewählt) - p95(LFM-live) unter Last: gepaart über die Texte,
+   B = 5000, Seed 20261009 (berichtet, nicht Gate-Kriterium; Gate sind die Punkte 1 und 2).
+5. RAM: Gemma-VmHWM <= LFM-live-VmHWM + 100 MB bei gleicher Aufgabe (Hook: -c 512 mit der
+   gewählten Thread-Zahl; Aggregator: Gemma mit dem gewählten -ub gegen LFM mit Live-Flags -ub 4096).
+6. Aggregator -ub: Gemma-Median je Längenklasse (2000/8000 Zeichen) <= LFM-live-Median im selben
+   Block, keine Fehler, -ub >= größte Live-Eingabe in Token (Census über alle Items + Anker),
+   Vektoren gegen Gemma -ub 4096: kleinster cos > 0,999.
+"""
+S4B_SEED = 20261009
+HOOK_TIMEOUT_MS = 5000.0
+RESERVE_MS = 1000.0
+TIE = 0.05
+OVERHEAD_SNIPPET = (
+    "import sys;sys.path.insert(0,sys.argv[1]);import vaultlib,semantic;"
+    "e=semantic.load_embeddings(sys.argv[2]);q=next(iter(e.values()))['vec'];"
+    "semantic.semantic_neighbors(q,e)")
+
+
+def register(name, port, binary, model, flags):
+    CONFIGS[name] = (port, binary, model, flags)
+    return name
+
+
+def hook_flags(threads):
+    return ["-c", "512", "-ngl", "0", "--threads", str(threads)]
+
+
+def agg_flags(ub):
+    fl = list(AGG); fl[fl.index("-ub") + 1] = str(ub)
+    return fl + ["-lv", "4"]  # -lv 4 nur für die Puffer-Logzeilen, ändert nichts an der Rechnung
+
+
+def ints(s):
+    return [int(x) for x in s.split(",") if x.strip()]
+
+
+def p95(v):
+    s = sorted(v)
+    return s[min(len(s) - 1, int(round(0.95 * (len(s) - 1))))]
+
+
+def hook_overhead(vault, n):
+    """Wanduhr eines frischen Python-Prozesses, der alles tut, was der Hook außer dem Embedding tut
+    (Start, Import, load_embeddings, semantic_neighbors). Untergrenze des Hook-Overheads."""
+    ms = []
+    for _ in range(n):
+        t0 = time.perf_counter()
+        subprocess.run(["python3", "-c", OVERHEAD_SNIPPET, str(REPO), vault], check=True)
+        ms.append((time.perf_counter() - t0) * 1000)
+    return stats(ms)
+
+
+def cmd_threads(a):
+    rng = random.Random(a.seed)
+    port, names = a.port_base, []
+    for t in ints(a.lfm_threads):
+        names.append(register(f"lfm_t{t}", port, LFM_BIN, LFM_MODEL, hook_flags(t))); port += 1
+    for t in ints(a.gem_threads):
+        names.append(register(f"gem_t{t}", port, EG2_BIN, GEMMA_MODEL, hook_flags(t))); port += 1
+    if "lfm_t4" not in names:
+        raise SystemExit("LFM-live (lfm_t4) muss mitlaufen")
+    texts = lade_queries()
+    res = {"start": pruefe("threads"), "seed": a.seed, "n_texte": len(texts), "warmup": WARMUP,
+           "flags": {n: CONFIGS[n][3] for n in names}, "last_cmd": a.load_cmd, "regeln": S4B_REGELN}
+    with ExitStack() as es:
+        servers = [es.enter_context(Server(n)) for n in names]
+        res["rss_nach_laden"] = {s.name: s.rss_loaded for s in servers}
+        for t in texts[:WARMUP]:
+            for s in servers:
+                s.embed(PREFIX_Q[s.name[:3]] + t)
+        if a.vault:
+            res["overhead_idle"] = hook_overhead(a.vault, a.n_overhead)
+        res["idle"] = hook_runde(servers, texts, "idle", rng)
+        print("idle", {k: (v["median_ms"], v["p95_ms"], v["max_ms"]) for k, v in res["idle"].items()
+                       if isinstance(v, dict)}, flush=True)
+        with Last(a.load_cwd, a.load_cmd) as last:
+            time.sleep(a.load_vorlauf)
+            for t in texts[:WARMUP]:
+                for s in servers:
+                    s.embed(PREFIX_Q[s.name[:3]] + t)
+            res["last"] = hook_runde(servers, texts, "last", rng)
+            if a.vault:
+                res["overhead_last"] = hook_overhead(a.vault, a.n_overhead)
+            last.stop()
+        res["last"]["lastlaeufe"] = last.runs
+        res["last"]["last_cpu_s"] = last.child_cpu_s
+        print("last", {k: (v["median_ms"], v["p95_ms"], v["max_ms"]) for k, v in res["last"].items()
+                       if isinstance(v, dict) and "p95_ms" in v}, flush=True)
+        res["rss_nach_last"] = {s.name: proc_status(s.pid) for s in servers}
+    res["ende"] = startbedingung()
+    speichere(a.key, res)
+    auswerten(a.key)
+
+
+def waehle(r):
+    """Regel 3 aus S4B_REGELN."""
+    gems = sorted(k for k in r["last"] if k.startswith("gem_t"))
+    best = min(r["last"][k]["p95_ms"] for k in gems)
+    kand = [k for k in gems if r["last"][k]["p95_ms"] <= best * (1 + TIE)]
+    if len(kand) > 1:
+        bi = min(r["idle"][k]["p95_ms"] for k in kand)
+        kand = [k for k in kand if r["idle"][k]["p95_ms"] <= bi * (1 + TIE)]
+    return min(kand, key=lambda k: int(k[5:]))
+
+
+def boot_p95_diff(g, l, B=5000, seed=S4B_SEED):
+    rng = random.Random(seed)
+    n, d = len(g), []
+    for _ in range(B):
+        idx = [rng.randrange(n) for _ in range(n)]
+        d.append(p95([g[i] for i in idx]) - p95([l[i] for i in idx]))
+    d.sort()
+    return round(p95(g) - p95(l), 1), [round(d[int(0.025 * B)], 1), round(d[int(0.975 * B) - 1], 1)]
+
+
+def auswerten(key, gem=None):
+    allres = json.loads(RESULTS.read_text())
+    r = allres[key]
+    names = [k for k in r["last"] if isinstance(r["last"][k], dict) and "p95_ms" in r["last"][k]]
+    print(f"\n{key}: Median / p95 / max in ms (idle | Last), Fehler")
+    for k in names:
+        i, l = r["idle"][k], r["last"][k]
+        print(f"  {k:8s} idle {i['median_ms']:7.1f} {i['p95_ms']:7.1f} {i['max_ms']:7.1f} | "
+              f"Last {l['median_ms']:7.1f} {l['p95_ms']:7.1f} {l['max_ms']:7.1f} | "
+              f"Fehler {i['fehler'] + l['fehler']} | VmHWM {r['rss_nach_last'][k]['VmHWM']} MB")
+    for ph in ("overhead_idle", "overhead_last"):
+        if ph in r:
+            print(f"  {ph}: Median {r[ph]['median_ms']} p95 {r[ph]['p95_ms']} max {r[ph]['max_ms']} ms")
+    gem = gem or waehle(r)
+    diff, ki = boot_p95_diff(r["last"][gem]["roh_ms"], r["last"]["lfm_t4"]["roh_ms"])
+    r["auswahl"] = {"gemma": gem, "p95_diff_last_ms": diff, "ki95": ki}
+    print(f"  Auswahl (Regel 3): {gem}; p95-Differenz {gem} - lfm_t4 unter Last {diff} ms, KI95 {ki}")
+    allres[key] = r
+    RESULTS.write_text(json.dumps(allres, indent=1, ensure_ascii=False))
+    return r
+
+
+def cmd_auswertung(a):
+    auswerten(a.key, a.gem)
+
+
+def cmd_census(a):
+    """Token-Zählung (beide Tokenizer, mit dem jeweiligen Dokument-Prefix, add_special) für jede Zeile
+    {"text": ..., "art": ...} der JSONL-Datei. Speichert nur Zahlen, keine Texte."""
+    register("gem_tok", 11530, EG2_BIN, GEMMA_MODEL, hook_flags(2))
+    register("lfm_tok", 11531, LFM_BIN, LFM_MODEL, hook_flags(2))
+    rows = [json.loads(x) for x in Path(a.texts).read_text().splitlines() if x.strip()]
+    res = {"start": pruefe("census"), "n": len(rows)}
+    with Server("gem_tok") as g, Server("lfm_tok") as l:
+        for s in (g, l):
+            counts = {}
+            for i, row in enumerate(rows):
+                if i % 2000 == 0:
+                    pruefe(f"census {s.name} #{i}")
+                counts.setdefault(row.get("art", "?"), []).append(s.ntok(PREFIX_D[s.name[:3]] + row["text"]))
+            alle = sorted(c for v in counts.values() for c in v)
+            res[s.name] = {"max": alle[-1], "p99": alle[int(0.99 * (len(alle) - 1))], "median": st.median(alle),
+                           "ueber": {str(u): sum(c > u for c in alle) for u in (512, 1024, 2048, 4096)},
+                           "je_art": {k: {"n": len(v), "max": max(v)} for k, v in counts.items()}}
+            print(s.name, json.dumps(res[s.name]), flush=True)
+        # Kalibrierung: Tokenzahl laut /tokenize vs. Zahl in der Server-Fehlermeldung (nur Doku)
+    speichere("s4b_census", res)
+
+
+def puffer_zeilen(name):
+    keys = ("buffer size", "n_batch ", "n_ubatch", "flash_attn", "causal_attn", "Flash Attention",
+            "setting n_batch", "n_ctx ", "KV")
+    out = []
+    for line in (OUT / f"{name}.log").read_text(errors="replace").splitlines():
+        if "llama_model_loader: - kv" in line or "print_info" in line:
+            continue
+        if any(k in line for k in keys):
+            out.append(line.split(" ", 2)[-1].strip())
+    return out
+
+
+def grenzprobe(s, text, ub):
+    """Text so kürzen, dass er knapp unter bzw. knapp über ub Token liegt; beide einbetten."""
+    pre = PREFIX_D[s.name[:3]]
+    if s.ntok(pre + text) <= ub:
+        return {"hinweis": "Text kürzer als ub, keine Probe"}
+    lo, hi = 0, len(text)
+    while lo < hi:  # kleinste Zeichenlänge mit > ub Token
+        mid = (lo + hi) // 2
+        if s.ntok(pre + text[:mid]) > ub:
+            hi = mid
+        else:
+            lo = mid + 1
+    out = {}
+    for tag, L in (("unter", lo - 40), ("ueber", lo + 40)):
+        n = s.ntok(pre + text[:L])
+        ms, ok, vec, err = s.embed(pre + text[:L], timeout=120, want_vec=True)
+        out[tag] = {"token_tokenize": n, "ok": ok, "fehler": err}
+    return out
+
+
+def cos(u, v):
+    import math
+    d = sum(x * y for x, y in zip(u, v))
+    return d / (math.sqrt(sum(x * x for x in u)) * math.sqrt(sum(y * y for y in v)))
+
+
+def cmd_ub(a):
+    data = json.loads(Path(a.long_texts).read_text())
+    rng = random.Random(a.seed)
+    ubs = ints(a.ubs)
+    if ubs[0] != 4096:
+        raise SystemExit("erster Block muss -ub 4096 sein (Referenzvektoren)")
+    ref = {}  # (modell, klasse) -> Vektoren von -ub 4096
+    res = {"regeln": S4B_REGELN, "seed": a.seed, "n": a.n, "warmup": a.warmup, "bloecke": {}}
+    port = 11510
+    for bi, ub in enumerate(ubs):
+        blk = {"start": pruefe(f"ub {ub}")}
+        names = [register("lfm_ub4096", port, LFM_BIN, LFM_MODEL, agg_flags(4096))]
+        names.append(register(f"gem_ub{ub}", port + 1, EG2_BIN, GEMMA_MODEL, agg_flags(ub)))
+        if ub != 4096:
+            names.append(register(f"lfm_ub{ub}", port + 2, LFM_BIN, LFM_MODEL, agg_flags(ub)))
+        port += 3
+        with ExitStack() as es:
+            servers = [es.enter_context(Server(n)) for n in names]
+            for s in servers:
+                blk[s.name] = {"flags": CONFIGS[s.name][3], "rss_nach_laden": s.rss_loaded,
+                               "puffer_log": puffer_zeilen(s.name)}
+            for klasse in ("2000", "8000"):
+                texts = data[klasse][: a.warmup + a.n]
+                for t in texts[: a.warmup]:
+                    for s in servers:
+                        s.embed(PREFIX_D[s.name[:3]] + t, timeout=120)
+                ms = {s.name: [] for s in servers}
+                fehl = {s.name: [] for s in servers}
+                vecs = {s.name: [] for s in servers}
+                cpu0 = {s.name: cpu_s(s.pid) for s in servers}
+                h0 = host_cpu()
+                for i, t in enumerate(texts[a.warmup:]):
+                    if i % 10 == 0:
+                        pruefe(f"ub {ub} {klasse} #{i}")
+                    order = list(servers); rng.shuffle(order)
+                    for s in order:
+                        dt, ok, vec, err = s.embed(PREFIX_D[s.name[:3]] + t, timeout=120, want_vec=True)
+                        vecs[s.name].append(vec)
+                        if ok:
+                            ms[s.name].append(dt)
+                        else:
+                            fehl[s.name].append(err)
+                h1 = host_cpu()
+                busy = 1 - (h1[1] - h0[1]) / max(1, h1[0] - h0[0])
+                for s in servers:
+                    m = s.name[:3]
+                    if ub == 4096 and s.name.endswith("4096") and (m, klasse) not in ref:
+                        ref[(m, klasse)] = vecs[s.name]
+                    cs = [cos(v, r) for v, r in zip(vecs[s.name], ref.get((m, klasse), [])) if v and r]
+                    blk[s.name][klasse] = {
+                        **(stats(ms[s.name]) if ms[s.name] else {"n": 0}),
+                        "fehler": len(fehl[s.name]), "fehler_beispiel": fehl[s.name][:1],
+                        "cpu_ms_pro_text": round((cpu_s(s.pid) - cpu0[s.name]) * 1000 / a.n, 1),
+                        "host_cpu_busy": round(busy, 3),
+                        "cos_zu_ub4096_min": round(min(cs), 6) if cs else None,
+                        "cos_zu_ub4096_n": len(cs)}
+                    print(ub, s.name, klasse, json.dumps({k: v for k, v in blk[s.name][klasse].items()
+                                                         if k != "fehler_beispiel"}), flush=True)
+            if ub != 4096:  # Grenzprobe am längsten Text: knapp unter / knapp über ub Token
+                lang = max(data["8000"], key=len)
+                for s in servers:
+                    if not s.name.endswith("4096"):
+                        blk[s.name]["grenzprobe"] = grenzprobe(s, lang, ub)
+                        print(ub, s.name, "grenzprobe", json.dumps(blk[s.name]["grenzprobe"]), flush=True)
+            for s in servers:
+                blk[s.name]["rss_nach_last"] = proc_status(s.pid)
+                print(ub, s.name, "RSS", blk[s.name]["rss_nach_last"], flush=True)
+        res["bloecke"][str(ub)] = blk
+        speichere(a.key, res)
+
+
+def cmd_gate_s4b(a):
+    r = json.loads(Path(a.results).read_text())
+    checks = []
+    gk = f"gem_t{a.gem_threads}"
+    quelle = a.hook_key or ("s4b_bestaetigung" if gk in r.get("s4b_bestaetigung", {}).get("last", {})
+                            else "s4b_threads")
+    h = r[quelle]
+    L, G = h["last"]["lfm_t4"], h["last"][gk]
+    checks.append((f"Hook [{quelle}]: {gk} p95 unter Last {G['p95_ms']} <= LFM-live {L['p95_ms']} ms",
+                   G["p95_ms"] <= L["p95_ms"]))
+    checks.append((f"Hook [{quelle}]: {gk} max unter Last {G['max_ms']} <= LFM-live {L['max_ms']} ms",
+                   G["max_ms"] <= L["max_ms"]))
+    ov = (h.get("overhead_last") or r["s4b_threads"]["overhead_last"])["p95_ms"]
+    checks.append((f"Hook: Reserve {gk} max {G['max_ms']} + Overhead p95 {ov} ms <= "
+                   f"{HOOK_TIMEOUT_MS - RESERVE_MS:.0f} ms", G["max_ms"] + ov <= HOOK_TIMEOUT_MS - RESERVE_MS))
+    print(f"INFO Reserve LFM-live: max {L['max_ms']} + Overhead p95 {ov} = {L['max_ms'] + ov:.0f} ms "
+          f"(Vergleich, kein Gate-Kriterium)")
+    fe = G["fehler"] + h["idle"][gk]["fehler"]
+    checks.append((f"Hook: {gk} ohne Fehler/Timeouts ({fe})", fe == 0))
+    g, l = h["rss_nach_last"][gk]["VmHWM"], h["rss_nach_last"]["lfm_t4"]["VmHWM"]
+    checks.append((f"RAM Hook: {gk} VmHWM {g} <= LFM-live {l} + {a.ram_budget_mb} MB", g <= l + a.ram_budget_mb))
+    blk = r["s4b_ub"]["bloecke"][str(a.gem_ub)]
+    gu, lu = blk[f"gem_ub{a.gem_ub}"], blk["lfm_ub4096"]
+    g, l = gu["rss_nach_last"]["VmHWM"], lu["rss_nach_last"]["VmHWM"]
+    checks.append((f"RAM Aggregator: gem_ub{a.gem_ub} VmHWM {g} <= LFM-live {l} + {a.ram_budget_mb} MB",
+                   g <= l + a.ram_budget_mb))
+    for k in ("2000", "8000"):
+        gm, lm = gu[k].get("median_ms"), lu[k].get("median_ms")
+        checks.append((f"Durchsatz {k} Zeichen: gem_ub{a.gem_ub} Median {gm} <= LFM-live {lm} ms",
+                       gm is not None and gm <= lm))
+        checks.append((f"Texte verloren {k}: gem_ub{a.gem_ub} Fehler {gu[k]['fehler']}", gu[k]["fehler"] == 0))
+        c = gu[k]["cos_zu_ub4096_min"]
+        checks.append((f"Vektoren {k}: gem_ub{a.gem_ub} min cos zu -ub 4096 = {c} > 0.999",
+                       c is not None and c > 0.999 and gu[k]["cos_zu_ub4096_n"] == gu[k]["n"]))
+    tmax = r["s4b_census"]["gem_tok"]["max"]
+    checks.append((f"Census: größte Live-Eingabe {tmax} Token (Gemma) <= -ub {a.gem_ub}", tmax <= a.gem_ub))
+    ok = all(c for _, c in checks)
+    for txt, c in checks:
+        print(("GRÜN " if c else "ROT  ") + txt)
+    print("GESAMT", "GRÜN" if ok else "ROT")
+    raise SystemExit(0 if ok else 1)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -379,8 +735,38 @@ def main():
     q.add_argument("--results", default=str(RESULTS))
     q.add_argument("--latency-ms", type=float, default=300.0)
     q.add_argument("--ram-budget-mb", type=float, default=100.0)
+    t = sp.add_parser("threads")
+    t.add_argument("--load-cwd", required=True)
+    t.add_argument("--load-cmd", default="node_modules/.bin/vitest run")
+    t.add_argument("--load-vorlauf", type=float, default=5.0)
+    t.add_argument("--gem-threads", default="1,2,3,4")
+    t.add_argument("--lfm-threads", default="4,2", help="lfm_t4 = LFM-live, Pflicht")
+    t.add_argument("--port-base", type=int, default=11520)
+    t.add_argument("--seed", type=int, default=S4B_SEED)
+    t.add_argument("--key", default="s4b_threads")
+    t.add_argument("--vault", help="Vault-Pfad für die Hook-Overhead-Messung (privat, nicht im Repo)")
+    t.add_argument("--n-overhead", type=int, default=20)
+    w = sp.add_parser("auswertung")
+    w.add_argument("--key", default="s4b_threads")
+    w.add_argument("--gem", help="Gemma-Konfiguration fest vorgeben (z. B. für den Bestätigungslauf)")
+    c = sp.add_parser("census")
+    c.add_argument("--texts", required=True, help='JSONL, je Zeile {"text": ..., "art": ...}')
+    u = sp.add_parser("ub")
+    u.add_argument("--long-texts", required=True)
+    u.add_argument("--ubs", default="4096,2048,1024,512")
+    u.add_argument("--n", type=int, default=35)
+    u.add_argument("--warmup", type=int, default=5)
+    u.add_argument("--seed", type=int, default=S4B_SEED)
+    u.add_argument("--key", default="s4b_ub")
+    b = sp.add_parser("gate-s4b")
+    b.add_argument("--results", default=str(RESULTS))
+    b.add_argument("--gem-threads", type=int, required=True)
+    b.add_argument("--gem-ub", type=int, required=True)
+    b.add_argument("--hook-key", help="Ergebnis-Schlüssel der Hook-Messung (Standard: Bestätigungslauf)")
+    b.add_argument("--ram-budget-mb", type=float, default=100.0)
     a = ap.parse_args()
-    {"hook": cmd_hook, "agg": cmd_agg, "mm": cmd_mm, "gate": cmd_gate}[a.cmd](a)
+    {"hook": cmd_hook, "agg": cmd_agg, "mm": cmd_mm, "gate": cmd_gate, "threads": cmd_threads,
+     "auswertung": cmd_auswertung, "census": cmd_census, "ub": cmd_ub, "gate-s4b": cmd_gate_s4b}[a.cmd](a)
 
 
 if __name__ == "__main__":

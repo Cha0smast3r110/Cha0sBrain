@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-MODELS = ["nomic", "lfm"]
+MODELS = sys.argv[1:] or ["nomic", "lfm"]  # Delta = letztes minus erstes
 K_NDCG = 5
 RECALL_KS = [5, 10]
 
@@ -93,7 +94,7 @@ def main():
            [(f"Recall@{k}", f"r{k}") for k in RECALL_KS]
     for label, key in rows:
         vals = {m: avg(agg[m][key]) for m in MODELS}
-        delta = vals["lfm"] - vals["nomic"]
+        delta = vals[MODELS[-1]] - vals[MODELS[0]]
         line = f"{label:<14}" + "".join(f"{vals[m]:>14.4f}" for m in MODELS)
         line += f"{delta:>+14.4f}"
         print(line)

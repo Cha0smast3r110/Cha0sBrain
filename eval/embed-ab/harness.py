@@ -34,6 +34,9 @@ from build_embeddings import iter_entry_texts  # noqa: E402
 HERE = Path(__file__).resolve().parent
 OLLAMA_URL = "http://localhost:11434/api/embeddings"
 LLAMACPP_URL = "http://127.0.0.1:11500/embedding"
+# Eigene Eval-Instanzen (nicht der Live-Server 11500 mit -c 512):
+LFM_EVAL_URL = "http://127.0.0.1:11511/embedding"
+GEMMA_EVAL_URL = "http://127.0.0.1:11510/embedding"
 
 # Serving-Realität (transparent): nomic läuft über Ollama (Produktions-Pfad des
 # Live-Hooks). LFM2.5-Embedding lädt in Ollama 0.20.3 NICHT (missing tensor
@@ -51,8 +54,19 @@ MODELS = {
     "lfm": {
         "backend": "llamacpp",
         "model": "LFM2.5-Embedding-350M-Q4_K_M",
+        "url": LFM_EVAL_URL,
         "doc_prefix": "document: ",
         "query_prefix": "query: ",
+    },
+    # EmbeddingGemma 2 (Google, 2026-10-06), Text-Backbone 270M, ggml-org Q8_0.
+    # Prefixe laut Modellkarte: Websuche-Task, Dokument ohne separaten Titel.
+    # Braucht llama.cpp >= Okt 2026 (Arch 'gemma-embedding2'), Build ~/llamacpp-eg2.
+    "gemma": {
+        "backend": "llamacpp",
+        "model": "embeddinggemma-2-Q8_0",
+        "url": GEMMA_EVAL_URL,
+        "doc_prefix": "title: none | text: ",
+        "query_prefix": "task: search result | query: ",
     },
 }
 
@@ -70,10 +84,10 @@ def _embed_ollama(text: str, model: str, timeout: float):
     return data.get("embedding")
 
 
-def _embed_llamacpp(text: str, timeout: float):
+def _embed_llamacpp(text: str, timeout: float, url: str = LLAMACPP_URL):
     body = json.dumps({"content": text}).encode("utf-8")
     req = urllib.request.Request(
-        LLAMACPP_URL, data=body, headers={"Content-Type": "application/json"}
+        url, data=body, headers={"Content-Type": "application/json"}
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         data = json.loads(resp.read().decode("utf-8"))
@@ -89,7 +103,7 @@ def embed(text: str, cfg: dict, prefix: str, timeout: float = 120.0):
     if cfg["backend"] == "ollama":
         vec = _embed_ollama(payload, cfg["model"], timeout)
     else:
-        vec = _embed_llamacpp(payload, timeout)
+        vec = _embed_llamacpp(payload, timeout, cfg.get("url", LLAMACPP_URL))
     if not (isinstance(vec, list) and vec):
         raise RuntimeError(f"Leeres Embedding von {cfg['model']}")
     return vec
@@ -145,17 +159,27 @@ def cmd_rank(model_key: str):
     print(f"[{model_key}] Rankings fuer {len(ranks)} Queries -> {path.name}")
 
 
-def cmd_pool():
-    """Vereint Top-P beider Modelle je Query -> pool.json (mit Eintrags-Text)."""
+def cmd_pool(models=None, only_unlabeled=False):
+    """Vereint Top-P der Modelle je Query -> pool.json (mit Eintrags-Text).
+
+    only_unlabeled: nur Kandidaten, die in labels.json noch kein Label haben
+    (Nachlabeln bei neuem Modell/gewachsenem Vault) -> pool_new.json.
+    """
+    models = models or list(MODELS)
+    labels = {}
+    if only_unlabeled:
+        labels = json.loads((HERE / "labels.json").read_text(encoding="utf-8"))
     queries = {q["id"]: q for q in
                json.loads((HERE / "queries.json").read_text(encoding="utf-8"))}
     corpus = dict(load_corpus())
     pool = {}
-    for mk in MODELS:
+    for mk in models:
         ranks = json.loads((HERE / f"ranks_{mk}.json").read_text(encoding="utf-8"))
         for qid, lst in ranks.items():
             bucket = pool.setdefault(qid, {})
             for item in lst[:POOL_P]:
+                if item["ref"] in labels.get(qid, {}):
+                    continue
                 bucket[item["ref"]] = corpus.get(item["ref"], "")
     out = []
     for qid, refs in pool.items():
@@ -165,7 +189,7 @@ def cmd_pool():
             "source": queries[qid].get("source", ""),
             "candidates": [{"ref": r, "text": t} for r, t in sorted(refs.items())],
         })
-    path = HERE / "pool.json"
+    path = HERE / ("pool_new.json" if only_unlabeled else "pool.json")
     path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     n_cand = sum(len(x["candidates"]) for x in out)
     print(f"Pool: {len(out)} Queries, {n_cand} Kandidaten gesamt -> {path.name}")
@@ -181,7 +205,9 @@ if __name__ == "__main__":
     elif cmd == "rank":
         cmd_rank(sys.argv[2])
     elif cmd == "pool":
-        cmd_pool()
+        args = sys.argv[2:]
+        only_new = "--new" in args
+        cmd_pool([a for a in args if a != "--new"] or None, only_new)
     else:
         print(f"Unbekanntes Kommando: {cmd}")
         sys.exit(1)

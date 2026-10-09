@@ -7,3 +7,7 @@ ranks_*.json
 labels.json
 queries.json
 RESULTS.md
+pool_new.json
+*_2026-07.json
+pool_new_*.json
+labels_new*.json

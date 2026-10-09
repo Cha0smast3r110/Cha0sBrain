@@ -1,0 +1,7 @@
+*.gguf
+*.json
+RESULTS.md
+*.log
+sheets*/
+*.jpg
+local_paths.json

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import random
 import sys
 from pathlib import Path
 
@@ -99,6 +100,21 @@ def main():
         line += f"{delta:>+14.4f}"
         print(line)
     print("=" * 58)
+
+    # Gepaarter Bootstrap ueber Queries: traegt das nDCG@5-Delta (letztes minus
+    # erstes Modell) oder ist es Zufall der Fragenauswahl? Seed fest -> reproduzierbar.
+    a, b = agg[MODELS[0]]["ndcg"], agg[MODELS[-1]]["ndcg"]
+    diffs = [y - x for x, y in zip(a, b)]
+    rng = random.Random(42)
+    boots = sorted(sum(rng.choice(diffs) for _ in diffs) / len(diffs)
+                   for _ in range(10000))
+    lo, hi = boots[249], boots[9749]
+    win = sum(d > 1e-9 for d in diffs)
+    loss = sum(d < -1e-9 for d in diffs)
+    print(f"\nPro Query nDCG@5: {MODELS[-1]} besser {win}, {MODELS[0]} besser {loss}, "
+          f"gleich {len(diffs) - win - loss}")
+    print(f"Bootstrap-95%-KI Delta nDCG@5: [{lo:+.3f}, {hi:+.3f}]"
+          + ("  -> signifikant" if lo > 0 or hi < 0 else "  -> nicht signifikant"))
 
     print("\nSimilarity-Verteilung (fuer Schwellen-Rekalibrierung):")
     print(f"{'Modell':<10}{'sim rel (mean)':>16}{'sim non (mean)':>16}{'Trennschaerfe':>16}")

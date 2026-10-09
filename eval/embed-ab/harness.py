@@ -37,6 +37,10 @@ LLAMACPP_URL = "http://127.0.0.1:11500/embedding"
 # Eigene Eval-Instanzen (nicht der Live-Server 11500 mit -c 512):
 LFM_EVAL_URL = "http://127.0.0.1:11511/embedding"
 GEMMA_EVAL_URL = "http://127.0.0.1:11510/embedding"
+# LFM wie der Live-Hook: Unit cha0sbrain-lfm-embed startet OHNE --pooling, also
+# GGUF-Default CLS (lfm2.pooling_type=2), -c 512. 'lfm' (11511) braucht dagegen
+# --pooling mean — damit wurden Juli- und Oktober-Eval gemessen.
+LFMCLS_EVAL_URL = "http://127.0.0.1:11513/embedding"
 
 # Serving-Realität (transparent): nomic läuft über Ollama (Produktions-Pfad des
 # Live-Hooks). LFM2.5-Embedding lädt in Ollama 0.20.3 NICHT (missing tensor
@@ -55,6 +59,14 @@ MODELS = {
         "backend": "llamacpp",
         "model": "LFM2.5-Embedding-350M-Q4_K_M",
         "url": LFM_EVAL_URL,
+        "doc_prefix": "document: ",
+        "query_prefix": "query: ",
+    },
+    # Produktions-Realitaet des Cha0sBrain-Hooks (Pooling CLS statt mean).
+    "lfmcls": {
+        "backend": "llamacpp",
+        "model": "LFM2.5-Embedding-350M-Q4_K_M (CLS)",
+        "url": LFMCLS_EVAL_URL,
         "doc_prefix": "document: ",
         "query_prefix": "query: ",
     },

@@ -1,0 +1,271 @@
+"""UserPromptSubmit hook: inject up to 3 vault entries relevant to the prompt.
+
+Gated: only entries scoring above the relevance threshold are injected, so
+trivial prompts cost zero tokens. Deduped per session so an entry is shown at
+most once. Hard rule: never block the session; any failure -> empty output,
+exit 0.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+import vaultlib
+
+MIN_SCORE = 4.0
+LIMIT = 3
+HOME_CLAUDE = Path(os.path.expanduser("~/.claude"))
+DIAG_LOG = Path(__file__).resolve().parent / "logs" / "inject_diag.jsonl"
+DIAG_LOG_MAX_BYTES = 20 * 1024 * 1024
+
+# --- Kontrollgruppe ----------------------------------------------------------
+# Ohne Gegenprobe ist jede Ersparnis-Zahl geraten: man sieht nur Sitzungen MIT
+# Injektion und hat nichts, wogegen man sie haelt. Deshalb bekommt ein fester
+# Anteil der Sitzungen bewusst KEINE Lektionen — obwohl passende da waeren.
+# Die zurueckgehaltenen Treffer werden mitgeschrieben, damit spaeter Gleiches
+# mit Gleichem verglichen wird ("Lektion war verfuegbar") statt Sitzungen mit
+# Treffern gegen Sitzungen ohne Treffer.
+#
+# Die Zuordnung ist deterministisch ueber die Session-Id: eine Sitzung ist
+# entweder ganz drin oder ganz draussen, nie halb — sonst verwaessert eine
+# spaete Injektion den Vergleich fuer die ganze Sitzung.
+HOLDOUT_SALT = "cha0sbrain-injection-holdout-v1"
+# Standard: AUS. Die Gegenprobe kostet in jeder betroffenen Sitzung echte Hilfe
+# — sie wird nur eingeschaltet, wenn jemand die Messung wirklich will
+# (config.json: "injection_holdout_rate", oder CHA0SBRAIN_HOLDOUT_RATE).
+DEFAULT_HOLDOUT_RATE = 0.0
+
+
+def holdout_rate() -> float:
+    """Anteil der Sitzungen ohne Injektion (0 = Gegenprobe aus)."""
+    try:
+        raw = os.environ.get("CHA0SBRAIN_HOLDOUT_RATE")
+        if raw is not None:
+            return max(0.0, min(1.0, float(raw)))
+        cfg_path = Path(__file__).resolve().parent / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return max(0.0, min(1.0, float(cfg.get("injection_holdout_rate", DEFAULT_HOLDOUT_RATE))))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return DEFAULT_HOLDOUT_RATE
+
+
+def injection_enabled() -> bool:
+    """Schalter fuer die ganze Injektion (config.json: "injection_enabled").
+
+    Pausiert seit 2026-10-05: das Kontrollgruppen-Experiment fand keinen Nutzen,
+    bis zum Umbau von Gate und Vault wird nichts eingespielt."""
+    try:
+        cfg_path = Path(__file__).resolve().parent / "config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        return bool(cfg.get("injection_enabled", True))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return True
+
+
+def is_holdout(session_id: str, rate: float | None = None) -> bool:
+    """Gehoert diese Sitzung zur Kontrollgruppe? Stabil ueber alle Prompts."""
+    r = holdout_rate() if rate is None else rate
+    if r <= 0:
+        return False
+    if r >= 1:
+        return True
+    digest = hashlib.sha256((HOLDOUT_SALT + (session_id or "nosession")).encode("utf-8")).digest()
+    bucket = int.from_bytes(digest[:4], "big") / 0xFFFFFFFF
+    return bucket < r
+
+
+def meta_path(session_id: str) -> Path:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+    return HOME_CLAUDE / f".cha0sbrain-inject-meta-{safe}.json"
+
+
+def load_meta(session_id: str) -> dict:
+    try:
+        d = json.loads(meta_path(session_id).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_meta(session_id: str, meta: dict) -> None:
+    """Begleitdatei zur Dedup-Liste: Kontrollgruppe, Umfang, Treffer.
+
+    Getrennte Datei, damit das bestehende Format der Dedup-Liste (reines
+    Array) unveraendert bleibt und aeltere Leser nicht stolpern.
+    """
+    try:
+        HOME_CLAUDE.mkdir(parents=True, exist_ok=True)
+        meta_path(session_id).write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _resolve_vault() -> str:
+    return vaultlib.load_config()
+
+
+def dedup_path(session_id: str) -> Path:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_") or "nosession"
+    return HOME_CLAUDE / f".cha0sbrain-injected-{safe}.json"
+
+
+def load_seen(session_id: str) -> set:
+    try:
+        data = json.loads(dedup_path(session_id).read_text(encoding="utf-8"))
+        return set(data) if isinstance(data, list) else set()
+    except (OSError, json.JSONDecodeError):
+        return set()
+
+
+def save_seen(session_id: str, refs: set) -> None:
+    try:
+        HOME_CLAUDE.mkdir(parents=True, exist_ok=True)
+        dedup_path(session_id).write_text(json.dumps(sorted(refs)), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def render_bullets(entries: list) -> str:
+    if not entries:
+        return ""
+    bullets = []
+    for e in entries:
+        desc = e.get("description") or e.get("title") or e["slug"]
+        bullets.append(f"- `{e['path']}`\n  {desc}")
+    return (
+        "## Relevante Vault-Lessons (zu deinem Prompt)\n\n"
+        + "\n".join(bullets)
+        + "\n\nUse the Read tool to load any entry that looks relevant before solving.\n"
+    )
+
+
+def _emit(stdout, ctx: str) -> None:
+    stdout.write(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": ctx,
+        }
+    }))
+
+
+def _log_diag(payload: dict) -> None:
+    """Best-effort Diagnosezeile fuer Gate-Messung; darf den Hook nie stoeren."""
+    try:
+        if os.environ.get("CHA0SBRAIN_RUNNING"):
+            return
+        if DIAG_LOG.exists() and DIAG_LOG.stat().st_size > DIAG_LOG_MAX_BYTES:
+            return
+        prompt = str(payload.get("prompt", ""))
+        cwd = str(payload.get("cwd", ""))
+        transcript_path = payload.get("transcript_path")
+        has_transcript = bool(transcript_path) and Path(str(transcript_path)).exists()
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "session_id": str(payload.get("session_id", "") or "nosession"),
+            "cwd_base": os.path.basename(cwd.rstrip(os.sep)) if cwd else "",
+            "env_kind": os.environ.get("CLAUDE_CODE_ENVIRONMENT_KIND"),
+            "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT"),
+            "child": os.environ.get("CLAUDE_CODE_CHILD_SESSION"),
+            "attended": os.environ.get("CLAUDE_CODE_SESSION_ATTENDED"),
+            "permission_mode": payload.get("permission_mode"),
+            "has_transcript": has_transcript,
+            "prompt_len": len(prompt),
+            "prompt_head": prompt[:60],
+        }
+        DIAG_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with DIAG_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        # Diagnose ist nur Messbasis; Hook-Ausgabe muss auch bei kaputtem Logpfad stabil bleiben.
+        return
+
+
+def main(stdin=None, stdout=None) -> int:
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+    try:
+        raw = stdin.read() or ""
+        try:
+            payload = json.loads(raw) if raw.strip() else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        # Eigene Analyse-Aufrufe (analyzer.call_claude setzt die Variable) bekommen
+        # nichts: sonst landen Lessons im Analyse-Prompt und je Lauf eine
+        # Phantom-Begleitdatei ohne Transkript. Auch die Diagnose schweigt hier.
+        if os.environ.get("CHA0SBRAIN_RUNNING"):
+            _emit(stdout, "")
+            return 0
+
+        _log_diag(payload)
+
+        if not injection_enabled():
+            _emit(stdout, "")
+            return 0
+
+        prompt = str(payload.get("prompt", ""))
+        cwd = str(payload.get("cwd", ""))
+        session_id = str(payload.get("session_id", "") or "nosession")
+        current_project = os.path.basename(os.path.realpath(os.path.expanduser(cwd))) if cwd else ""
+
+        seen = load_seen(session_id)
+        entries = vaultlib.select_entries(
+            _resolve_vault(), prompt, current_project,
+            min_score=MIN_SCORE, limit=LIMIT, exclude_refs=seen,
+        )
+
+        holdout = is_holdout(session_id)
+        meta = load_meta(session_id)
+        meta["cwd_base"] = current_project
+        meta["holdout"] = holdout
+        meta["prompts"] = int(meta.get("prompts", 0)) + 1
+        if entries:
+            # Auch in der Kontrollgruppe festhalten, dass es Treffer GAB —
+            # sonst laesst sich spaeter nicht Gleiches mit Gleichem vergleichen.
+            withheld = set(meta.get("withheld") or [])
+            matched = {e["ref"] for e in entries}
+            meta["matched_any"] = True
+            # Welcher Prompt der erste mit Treffer war. Nur dieser eine ist die
+            # Auswertungseinheit; spaetere sind durch die vorherige Injektion
+            # kontaminiert. In der Behandlungsgruppe stuende das auch im
+            # Transkript (der injizierte Block ist dort sichtbar), in der
+            # Kontrollgruppe aber nicht — dort wird ja nichts geschrieben. Ohne
+            # diese Nummer ist die Einheit in der Kontrollgruppe nicht
+            # auffindbar und der Vergleich damit unmoeglich.
+            if "first_hit_prompt" not in meta:
+                meta["first_hit_prompt"] = meta["prompts"]
+                meta["first_hit_ts"] = datetime.now(timezone.utc).isoformat()
+                meta["first_hit_refs"] = sorted(matched)
+            if holdout:
+                meta["withheld"] = sorted(withheld | matched)
+
+        if holdout:
+            save_meta(session_id, meta)
+            _emit(stdout, "")
+            return 0
+
+        ctx = render_bullets(entries)
+        if entries:
+            save_seen(session_id, seen | {e["ref"] for e in entries})
+            meta["injected_chars"] = int(meta.get("injected_chars", 0)) + len(ctx)
+        save_meta(session_id, meta)
+        _emit(stdout, ctx)
+        return 0
+    except Exception:
+        try:
+            _emit(stdout, "")
+        except Exception:
+            pass
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,419 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+import handbuch_miner  # noqa: E402
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _tmp_log(tmp_path, monkeypatch):
+    """Tests duerfen nie ins echte Miner-Log schreiben."""
+    monkeypatch.setattr(handbuch_miner, "LOG_PATH", tmp_path / "miner.log")
+    for handler in list(handbuch_miner.logger.handlers):
+        handbuch_miner.logger.removeHandler(handler)
+    yield
+    for handler in list(handbuch_miner.logger.handlers):
+        handbuch_miner.logger.removeHandler(handler)
+        handler.close()
+
+
+def _session_file(root: Path, session_id: str) -> Path:
+    path = root / f"{session_id}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"sessionId": session_id}) + "\n", encoding="utf-8")
+    return path
+
+
+def _gold(path: Path, rows: list[dict]) -> Path:
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    return path
+
+
+def _patch_config(monkeypatch, vault: Path) -> None:
+    monkeypatch.setattr(handbuch_miner.brain, "load_config", lambda: {"vault_path": str(vault), "model": "haiku"})
+    monkeypatch.setattr(handbuch_miner.brain, "load_existing_tags", lambda vault_path: {})
+    monkeypatch.setattr(handbuch_miner.brain, "load_existing_wings", lambda vault_path: {})
+
+
+def _parse(session_id: str, timestamp: str = "2026-10-01T12:00:00Z") -> dict:
+    return {
+        "session_id": session_id,
+        "project": "example-app",
+        "project_dir": "/tmp/example-app",
+        "timestamp": timestamp,
+        "conversation": [],
+        "tool_calls": [],
+    }
+
+
+def _existing_handgriff(vault: Path, session_id: str = "s1", system: str = "beispiel-crm", aufgabe: str = "Benutzer anlegen") -> Path:
+    path = vault / "handbuch" / system / "benutzer-anlegen.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = handbuch_miner.handgriff.render_frontmatter(
+        {"type": "handgriff", "system": system, "aufgabe": aufgabe, "quellen": [f"session {session_id[:8]}"]}
+    )
+    path.write_text(fm + f"# {system}: {aufgabe}\n", encoding="utf-8")
+    return path
+
+
+def test_only_handgriff_topics_reach_writer(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda *args, **kwargs: [
+            {"type": "anleitung", "title": "Tutorial"},
+            {"type": "handgriff", "title": "Handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"},
+        ],
+    )
+    written_topics = []
+
+    def fake_write(topics, *_args, **_kwargs):
+        written_topics.extend(topics)
+        return SimpleNamespace(written=[])
+
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", fake_write)
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert result["done"] == 1
+    assert [topic["type"] for topic in written_topics] == ["handgriff"]
+
+
+def test_resume_skips_done_but_retries_error(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    for sid in ("s1", "s2"):
+        _session_file(sessions, sid)
+    gold = _gold(
+        tmp_path / "gold.jsonl",
+        [{"session_id": "s1", "datum": "2026-10-01"}, {"session_id": "s2", "datum": "2026-10-02"}],
+    )
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+
+    def fake_analyze(sd, *_args, **_kwargs):
+        calls.append(sd["session_id"])
+        if sd["session_id"] == "s2":
+            raise RuntimeError("boom")
+        return []
+
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", fake_analyze)
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda topics, *_args, **_kwargs: SimpleNamespace(written=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    first = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+    stored = json.loads(state.read_text(encoding="utf-8"))
+    second = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+
+    assert first["done"] == 1 and first["error"] == 1
+    assert stored["s1"]["status"] == "done"
+    assert stored["s2"]["status"] == "error"
+    assert second["error"] == 1
+    assert calls == ["s1", "s2", "s2"]
+
+
+def test_missing_session_is_recorded_and_run_continues(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(
+        tmp_path / "gold.jsonl",
+        [{"session_id": "missing", "datum": "2026-10-01"}, {"session_id": "s1", "datum": "2026-10-02"}],
+    )
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda topics, *_args, **_kwargs: SimpleNamespace(written=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+    stored = json.loads(state.read_text(encoding="utf-8"))
+
+    assert result["missing"] == 1
+    assert result["done"] == 1
+    assert stored["missing"]["status"] == "missing"
+
+
+def test_dry_run_calls_analyzer_but_not_writer_or_state(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    analyzer_calls = []
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda sd, *_args, **_kwargs: analyzer_calls.append(sd["session_id"]) or [
+            {"type": "handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}
+        ],
+    )
+    monkeypatch.setattr(
+        handbuch_miner.writer,
+        "write_entries",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("writer must not run")),
+    )
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state, dry_run=True)
+
+    assert analyzer_calls == ["s1"]
+    assert result["done"] == 1
+    assert not state.exists()
+
+
+def test_gold_order_is_datum_ascending_and_session_ids_are_deduped(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    for sid in ("s1", "s2"):
+        _session_file(sessions, sid)
+    gold = _gold(
+        tmp_path / "gold.jsonl",
+        [
+            {"session_id": "s2", "datum": "2026-10-02"},
+            {"session_id": "s1", "datum": "2026-10-01"},
+            {"session_id": "s1", "datum": "2026-10-03"},
+        ],
+    )
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    order: list[str] = []
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", lambda sd, *_args, **_kwargs: order.append(sd["session_id"]) or [])
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda topics, *_args, **_kwargs: SimpleNamespace(written=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert order == ["s1", "s2"]
+
+
+def test_handbuch_pages_are_reloaded_for_each_session(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    for sid in ("s1", "s2"):
+        _session_file(sessions, sid)
+    gold = _gold(
+        tmp_path / "gold.jsonl",
+        [{"session_id": "s1", "datum": "2026-10-01"}, {"session_id": "s2", "datum": "2026-10-02"}],
+    )
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+
+    def fake_analyze(sd, *_args, **kwargs):
+        if sd["session_id"] == "s2":
+            assert kwargs["handbuch_pages"] == {"beispiel-crm": ["Aufgabe A"]}
+        return [{"type": "handgriff", "system": "beispiel-crm", "aufgabe": "Aufgabe A"}]
+
+    def fake_write(topics, _sd, vault_path, *_args, **_kwargs):
+        path = Path(vault_path) / "handbuch" / "beispiel-crm" / "aufgabe-a.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('---\ntype: handgriff\naufgabe: "Aufgabe A"\n---\n# Aufgabe A\n', encoding="utf-8")
+        return SimpleNamespace(written=[path])
+
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", fake_analyze)
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", fake_write)
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert result["done"] == 2
+    assert result["pages"] == 2
+
+
+def test_processed_sessions_state_is_not_touched(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda topics, *_args, **_kwargs: SimpleNamespace(written=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+    monkeypatch.setattr(
+        handbuch_miner.brain,
+        "mark_session_processed",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("processed_sessions touched")),
+    )
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert result["done"] == 1
+
+
+def test_state_records_analyzer_topics_and_quarantine(tmp_path, monkeypatch):
+    """Ohne Seite muss nachvollziehbar sein, was der Analyzer geliefert hat."""
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda *args, **kwargs: [
+            {"type": "anleitung", "title": "Tutorial"},
+            {"type": "handgriff", "title": "Handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"},
+        ],
+    )
+    monkeypatch.setattr(
+        handbuch_miner.writer,
+        "write_entries",
+        lambda topics, *_a, **_k: SimpleNamespace(written=[], quarantined=["_quarantine/benutzer-anlegen.md"]),
+    )
+
+    handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+
+    rec = json.loads(state.read_text(encoding="utf-8"))["s1"]
+    assert rec["topics"] == ["anleitung: Tutorial", "handgriff: beispiel-crm / Benutzer anlegen"]
+    assert rec["quarantined"] == ["_quarantine/benutzer-anlegen.md"]
+    assert (tmp_path / "miner.log").exists()
+
+
+
+def test_redo_processes_done_session_again(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"s1": {"status": "done", "pages": []}}), encoding="utf-8")
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", lambda sd, *_a, **_k: calls.append(sd["session_id"]) or [])
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda topics, *_args, **_kwargs: SimpleNamespace(written=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    without_redo = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+    with_redo = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state, redo=True)
+
+    assert without_redo["skipped_done"] == 1
+    assert with_redo["done"] == 1
+    assert calls == ["s1"]
+
+
+def test_miner_passes_fresh_model_and_records_beleg(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(handbuch_miner.brain, "load_config", lambda: {"vault_path": str(vault), "model": "haiku", "handgriff_model": "sonnet"})
+    monkeypatch.setattr(handbuch_miner.brain, "load_existing_tags", lambda vault_path: {})
+    monkeypatch.setattr(handbuch_miner.brain, "load_existing_wings", lambda vault_path: {})
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", lambda *_a, **_k: [{"type": "handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}])
+    seen_kwargs = {}
+
+    def fake_write(topics, *_args, **kwargs):
+        seen_kwargs.update(kwargs)
+        return SimpleNamespace(written=[], quarantined=[], beleg=[{"path": "p", "belegt": 2, "total": 3, "removed": []}])
+
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", fake_write)
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state, fresh=True)
+
+    rec = json.loads(state.read_text(encoding="utf-8"))["s1"]
+    assert seen_kwargs["fresh_handgriff"] is True
+    assert seen_kwargs["handgriff_model"] == "sonnet"
+    assert rec["beleg"] == [{"path": "p", "belegt": 2, "total": 3, "removed": []}]
+    assert "Belege 2/3" in capsys.readouterr().out
+
+
+def test_miner_retries_once_when_prior_session_handgriffe_vanish(tmp_path, monkeypatch, capsys):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    _existing_handgriff(vault, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[list[dict]] = []
+
+    def fake_analyze(_sd, *_args, **kwargs):
+        calls.append(kwargs["session_handgriffe"])
+        if len(calls) == 1:
+            return [{"type": "troubleshooting", "title": "Nur Analyse"}]
+        return [{"type": "handgriff", "system": "beispiel-crm", "aufgabe": "Benutzer anlegen"}]
+
+    written = vault / "handbuch" / "beispiel-crm" / "benutzer-anlegen.md"
+    monkeypatch.setattr(handbuch_miner.analyzer, "analyze_session", fake_analyze)
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[written], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert len(calls) == 2
+    assert calls[0][0]["aufgabe"] == "Benutzer anlegen"
+    assert result["analyzer_retry"] == 1
+    assert result["pages"] == 1
+    assert "Analyzer-Wiederholungen 1" in capsys.readouterr().out
+
+
+def test_miner_retries_once_and_finishes_when_retry_still_has_no_handgriff(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    _existing_handgriff(vault, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    state = tmp_path / "state.json"
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda sd, *_a, **_k: calls.append(sd["session_id"]) or [{"type": "troubleshooting", "title": "Nur Analyse"}],
+    )
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=state)
+
+    stored = json.loads(state.read_text(encoding="utf-8"))["s1"]
+    assert calls == ["s1", "s1"]
+    assert result["done"] == 1 and result["pages"] == 0
+    assert stored["status"] == "done"
+
+
+def test_miner_does_not_retry_without_prior_session_handgriffe(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    sessions = tmp_path / "sessions"
+    _session_file(sessions, "s1")
+    gold = _gold(tmp_path / "gold.jsonl", [{"session_id": "s1", "datum": "2026-10-01"}])
+    _patch_config(monkeypatch, vault)
+    monkeypatch.setattr(handbuch_miner.collector, "parse_session", lambda path: _parse(Path(path).stem))
+    calls: list[str] = []
+    monkeypatch.setattr(
+        handbuch_miner.analyzer,
+        "analyze_session",
+        lambda sd, *_a, **_k: calls.append(sd["session_id"]) or [{"type": "troubleshooting", "title": "Nur Analyse"}],
+    )
+    monkeypatch.setattr(handbuch_miner.writer, "write_entries", lambda *_a, **_k: SimpleNamespace(written=[], quarantined=[], beleg=[]))
+    monkeypatch.setattr(handbuch_miner.indexer, "update_indexes", lambda vault_path: None)
+
+    result = handbuch_miner.run_miner(gold_path=gold, sessions_dirs=[sessions], state_path=tmp_path / "state.json")
+
+    assert calls == ["s1"]
+    assert result["analyzer_retry"] == 0

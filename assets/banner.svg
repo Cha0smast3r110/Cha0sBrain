@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="Cha0sBrain — Turn Claude Code sessions into a structured Obsidian second brain, automatically">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#161b22"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7c9cff"/>
+      <stop offset="1" stop-color="#a97cff"/>
+    </linearGradient>
+    <style>
+      .mono { font-family: "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="300" fill="url(#bg)"/>
+  <rect width="1200" height="300" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <!-- subtle node graph motif, right side -->
+  <g stroke="#30363d" stroke-width="1.5" fill="#7c9cff" opacity="0.55">
+    <line x1="980" y1="70"  x2="1080" y2="120"/>
+    <line x1="1080" y1="120" x2="1010" y2="200"/>
+    <line x1="1080" y1="120" x2="1140" y2="180"/>
+    <line x1="1010" y1="200" x2="1090" y2="240"/>
+    <line x1="980" y1="70"  x2="1010" y2="200"/>
+    <circle cx="980"  cy="70"  r="7"/>
+    <circle cx="1080" cy="120" r="9" fill="#a97cff"/>
+    <circle cx="1010" cy="200" r="7"/>
+    <circle cx="1140" cy="180" r="6"/>
+    <circle cx="1090" cy="240" r="7" fill="#a97cff"/>
+  </g>
+
+  <!-- prompt line -->
+  <text x="80" y="110" class="mono" font-size="26" fill="#6e7681">~/sessions $ <tspan fill="#3fb950">claude-code</tspan></text>
+
+  <!-- wordmark -->
+  <text x="78" y="185" class="mono" font-size="76" font-weight="700" fill="#e6edf3">Cha0s<tspan fill="url(#accent)">Brain</tspan></text>
+
+  <!-- tagline -->
+  <text x="82" y="232" class="mono" font-size="24" fill="#8b949e">Turn Claude Code sessions into a structured</text>
+  <text x="82" y="264" class="mono" font-size="24" fill="#8b949e">Obsidian second brain &#8212; <tspan fill="#a97cff">automatically.</tspan></text>
+</svg>

@@ -1,0 +1,363 @@
+"""Deterministic validator for a single vault entry.
+
+Runs Klasse-1 (hard), Klasse-2 (structural, type-dependent) and Klasse-3
+(stylistic, warning-only) checks. No LLM calls, no external I/O.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+
+import yaml
+
+REQUIRED_FRONTMATTER_KEYS = {
+    "tags", "wing", "type", "project", "date", "session_id", "difficulty"
+}
+
+VALID_ENTRY_TYPES = {"anleitung", "troubleshooting", "recherche", "handgriff"}
+
+REQUIRED_SECTIONS: dict[str, list[str]] = {
+    # Section-Namen als lowercase-Substrings. Matching ist case-insensitive,
+    # Umlaute werden auf o/a/u normalisiert. Reihenfolge egal.
+    # Audit 2026-08-29: "zweites beispiel" + "glossar" von Pflicht -> optional
+    # entfernt (waren die grössten Füllstoff-Treiber je 200+ Zeichen Wiederholung).
+    # Sie dürfen weiter erscheinen, sind aber kein Quarantäne-Grund mehr. Der Kern
+    # (Problem/Hintergrund/Lösung/Cheatsheet) bleibt Pflicht.
+    "anleitung": [
+        "worum geht", "problemstellung", "hintergrundwissen",
+        "losung", "cheatsheet",
+    ],
+    "troubleshooting": [
+        "tl;dr", "symptome", "kontext", "schritt-fur-schritt",
+        "falls es nicht klappt",
+    ],
+    "recherche": [
+        "worum geht", "fragestellung", "kontext",
+        "recherche-ergebnisse", "fazit", "offene fragen",
+    ],
+    "handgriff": [
+        "wann brauchst", "was du brauchst", "schritte", "so prufst",
+        "stolperfallen", "ruckgangig", "wenn du nicht weiterkommst",
+    ],
+}
+
+MIN_SECTION_LEN = 200
+SECTION_MIN_LEN: dict[str, int] = {"handgriff": 20}
+
+# Handgriff-Prompt verlangt diesen Satz, wenn ein Abschnitt im Material nicht belegt ist
+# (L4: nichts dazuerfinden). Er ist kuerzer als SECTION_MIN_LEN und muss trotzdem gelten.
+NOT_EVIDENCED_PLACEHOLDER = "noch nicht belegt."
+
+# Lektionskarte: der Analyzer-Prompt verlangt max 220 Zeichen, Haiku ueberzieht
+# das aber regelmaessig (gemessen 2026-10-06: 2 von 4 echten Karten bei 250-400).
+# Die harte Grenze liegt deshalb hoeher, damit eine gute, etwas lange Karte nicht
+# still unbrauchbar wird; 2 Karten bleiben so unter ~700 Zeichen Injektion.
+LESSON_MIN_CHARS = 30
+LESSON_MAX_CHARS = 320
+
+FORBIDDEN_PHRASES = ["wie du weißt", "standardmäßig", "klassischerweise", "bekanntlich"]
+
+GENERIC_TERMS = {
+    "testing", "test", "tests", "api", "server", "workflow",
+    "automation", "management", "content", "verification", "contract",
+    "tools", "tool", "code", "script", "config", "setup", "claude",
+    "projekt", "project", "fix", "bug", "update", "data",
+}
+
+CARD_KEYS = {
+    "lesson", "trigger", "trigger_terms", "evidence", "card_version",
+    "seen_sessions", "stale", "stale_reason",
+}
+
+
+def _normalize(text: str) -> str:
+    # Real umlauts first (single-char → single-char), then ASCII
+    # transliterations (two-char → single-char). Order matters: doing
+    # "ae"→"a" before "ä"→"a" would still be safe, but doing it after
+    # avoids accidentally re-transforming an already-normalized "ä".
+    s = (text.lower()
+         .replace("ä", "a").replace("ö", "o").replace("ü", "u")
+         .replace("ß", "ss"))
+    return (s.replace("ae", "a").replace("oe", "o").replace("ue", "u")
+            .replace("sz", "ss"))
+
+
+@dataclass
+class ValidationResult:
+    passed: bool
+    errors: list[str] = field(default_factory=list)
+    warnings: list[dict] = field(default_factory=list)
+
+
+def _split_frontmatter(content: str) -> tuple[dict | None, str, str | None]:
+    """Return (frontmatter_dict, body, parse_error_or_None)."""
+    if not content.startswith("---"):
+        return None, content, "frontmatter_missing"
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None, content, "frontmatter_unterminated"
+    try:
+        fm = yaml.safe_load(parts[1])
+    except yaml.YAMLError as e:
+        return None, parts[2], f"frontmatter_yaml_error: {e}"
+    if not isinstance(fm, dict):
+        return None, parts[2], "frontmatter_not_dict"
+    return fm, parts[2], None
+
+
+def _check_preamble_free(body: str) -> str | None:
+    """First non-empty body line must start with '# '."""
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        if re.match(r"^\s*#\s+\S", line):
+            return None
+        return f"preamble_free: erste nicht-leere Body-Zeile ist kein H1: {line[:80]!r}"
+    return "preamble_free: body is empty"
+
+
+def _check_frontmatter_complete(fm: dict | None, fm_error: str | None) -> str | None:
+    if fm_error:
+        return f"frontmatter_complete: {fm_error}"
+    assert fm is not None
+    missing = REQUIRED_FRONTMATTER_KEYS - set(fm.keys())
+    if missing:
+        return f"frontmatter_complete: missing keys {sorted(missing)}"
+    return None
+
+
+def _check_h1_nonempty(body: str) -> str | None:
+    """H1 title exists, is non-empty, and not the '{title}' placeholder."""
+    for line in body.splitlines():
+        if not line.strip():
+            continue
+        m = re.match(r"^\s*#\s+(.*?)\s*$", line)
+        if not m:
+            return None  # preamble_free will catch this instead
+        title = m.group(1).strip()
+        if not title:
+            return "h1_nonempty: H1 ist leer"
+        if title == "{title}":
+            return "h1_nonempty: H1 ist Template-Platzhalter '{title}'"
+        return None
+    return None
+
+
+def _check_code_fences_balanced(body: str) -> str | None:
+    fence_count = sum(1 for line in body.splitlines() if line.lstrip().startswith("```"))
+    if fence_count % 2 != 0:
+        return f"code_fences_balanced: odd number of ``` fences ({fence_count})"
+    return None
+
+
+def _section_bodies(body: str) -> dict[str, str]:
+    """Return {normalized_heading: section_body_text}."""
+    sections: dict[str, str] = {}
+    current_head: str | None = None
+    current_lines: list[str] = []
+    for line in body.splitlines():
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            if current_head is not None:
+                sections[current_head] = "\n".join(current_lines)
+            current_head = _normalize(m.group(1))
+            current_lines = []
+        elif current_head is not None:
+            current_lines.append(line)
+    if current_head is not None:
+        sections[current_head] = "\n".join(current_lines)
+    return sections
+
+
+def _check_sections(body: str, entry_type: str) -> list[str]:
+    errors: list[str] = []
+    required = REQUIRED_SECTIONS.get(entry_type, [])
+    sections = _section_bodies(body)
+    min_len = SECTION_MIN_LEN.get(entry_type, MIN_SECTION_LEN)
+    for needle in required:
+        needle_norm = _normalize(needle)
+        match_head = next(
+            (head for head in sections if needle_norm in head), None
+        )
+        if match_head is None:
+            errors.append(f"section_missing: '{needle}' nicht gefunden in {entry_type}")
+            continue
+        section_body = sections[match_head].strip()
+        if entry_type == "handgriff" and section_body.lower() == NOT_EVIDENCED_PLACEHOLDER:
+            continue
+        if len(section_body) < min_len:
+            errors.append(
+                f"section_empty: '{needle}' hat nur {len(section_body)} Zeichen "
+                f"(min {min_len})"
+            )
+    return errors
+
+
+def _check_handgriff_schema(fm: dict | None, body: str) -> list[str]:
+    if not isinstance(fm, dict) or fm.get("type") != "handgriff":
+        return []
+    import handgriff
+
+    errors: list[str] = []
+    if not str(fm.get("system") or "").strip():
+        errors.append("handgriff_schema: missing system")
+    if not str(fm.get("aufgabe") or "").strip():
+        errors.append("handgriff_schema: missing aufgabe")
+    status = fm.get("status")
+    if status not in handgriff.STATUS_VALUES:
+        errors.append(f"handgriff_schema: invalid status {status!r}")
+    secret = handgriff.find_secret(body)
+    if secret:
+        errors.append(f"secret_pattern: {secret}")
+    return errors
+
+
+def _check_forbidden_phrases(body: str) -> list[dict]:
+    warnings: list[dict] = []
+    lines = body.splitlines()
+    for lineno, line in enumerate(lines, start=1):
+        line_lower = line.lower()
+        for phrase in FORBIDDEN_PHRASES:
+            idx = line_lower.find(phrase)
+            if idx < 0:
+                continue
+            start = max(0, idx - 20)
+            end = min(len(line), idx + len(phrase) + 40)
+            warnings.append({
+                "rule": "forbidden_phrase",
+                "detail": phrase,
+                "line": lineno,
+                "snippet": line[start:end].strip(),
+            })
+    return warnings
+
+
+_TERM_RE = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
+
+
+def _coerce_trigger_terms(value) -> list[str] | None:
+    """Return trigger_terms as list, accepting YAML lists and flat parser strings."""
+    if isinstance(value, list):
+        terms = value
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped.startswith("[") or not stripped.endswith("]"):
+            return None
+        try:
+            parsed = yaml.safe_load(stripped)
+        except yaml.YAMLError:
+            return None
+        if not isinstance(parsed, list):
+            return None
+        terms = parsed
+    else:
+        return None
+    if not all(isinstance(term, str) for term in terms):
+        return None
+    return terms
+
+
+def _card_schema_errors(fm: dict | None) -> list[str]:
+    """Return card schema violations. Empty list means valid card or no card."""
+    if not isinstance(fm, dict):
+        return []
+    present = CARD_KEYS & set(fm.keys())
+    if not present:
+        return []
+
+    errors: list[str] = []
+    lesson = fm.get("lesson")
+    if not isinstance(lesson, str) or not (LESSON_MIN_CHARS <= len(lesson.strip()) <= LESSON_MAX_CHARS):
+        errors.append(f"lesson must be a string with {LESSON_MIN_CHARS}-{LESSON_MAX_CHARS} chars")
+
+    trigger = fm.get("trigger")
+    if not isinstance(trigger, str) or not trigger.strip() or len(trigger.strip()) > 120:
+        errors.append("trigger must be a non-empty string with <=120 chars")
+
+    terms = _coerce_trigger_terms(fm.get("trigger_terms"))
+    if terms is None:
+        errors.append("trigger_terms must be a YAML list")
+    else:
+        if not (3 <= len(terms) <= 8):
+            errors.append("trigger_terms must contain 3-8 entries")
+        for term in terms:
+            if term != term.lower():
+                errors.append(f"trigger_term must be lowercase: {term!r}")
+            if not _TERM_RE.match(term):
+                errors.append(f"trigger_term must be 3-40 lowercase chars: {term!r}")
+            if term in GENERIC_TERMS:
+                errors.append(f"trigger_term is generic: {term!r}")
+
+    evidence = fm.get("evidence")
+    if not isinstance(evidence, str) or len(evidence.strip()) > 200:
+        errors.append("evidence must be a string with <=200 chars")
+
+    if not isinstance(fm.get("card_version"), int):
+        errors.append("card_version must be an int")
+
+    seen_sessions = fm.get("seen_sessions")
+    if not isinstance(seen_sessions, int) or seen_sessions < 1:
+        errors.append("seen_sessions must be an int >=1")
+
+    if "stale" in fm and not isinstance(fm.get("stale"), bool):
+        errors.append("stale must be a bool")
+    if "stale_reason" in fm and not isinstance(fm.get("stale_reason"), str):
+        errors.append("stale_reason must be a string")
+
+    return errors
+
+
+def card_is_valid(fm: dict) -> bool:
+    """Return True only for complete, valid lesson-card frontmatter."""
+    if not isinstance(fm, dict):
+        return False
+    if not (CARD_KEYS & set(fm.keys())):
+        return False
+    return not _card_schema_errors(fm)
+
+
+def _check_card_schema(fm: dict | None) -> list[dict]:
+    errors = _card_schema_errors(fm)
+    if not errors:
+        return []
+    return [{
+        "rule": "card_schema",
+        "detail": "; ".join(errors),
+        "line": None,
+        "snippet": "",
+    }]
+
+
+def validate(content: str, entry_type: str) -> ValidationResult:
+    if entry_type not in VALID_ENTRY_TYPES:
+        raise ValueError(f"unknown entry_type: {entry_type!r}")
+
+    errors: list[str] = []
+    warnings: list[dict] = []
+
+    fm, body, fm_error = _split_frontmatter(content)
+
+    err = _check_frontmatter_complete(fm, fm_error)
+    if err:
+        errors.append(err)
+
+    err = _check_preamble_free(body)
+    if err:
+        errors.append(err)
+
+    err = _check_h1_nonempty(body)
+    if err:
+        errors.append(err)
+
+    err = _check_code_fences_balanced(body)
+    if err:
+        errors.append(err)
+
+    errors.extend(_check_sections(body, entry_type))
+    errors.extend(_check_handgriff_schema(fm, body))
+
+    warnings.extend(_check_forbidden_phrases(body))
+    warnings.extend(_check_card_schema(fm))
+
+    return ValidationResult(passed=not errors, errors=errors, warnings=warnings)

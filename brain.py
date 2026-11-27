@@ -438,6 +438,11 @@ def process_session(
     logger.info(f"Processing session {session_id} from {cwd}")
 
     model = config.get("model", "haiku")
+    analyzer.configure_thinking(
+        model,
+        max_thinking_tokens=config.get("lesson_max_thinking_tokens"),
+        effort=config.get("lesson_effort"),
+    )
     vault_path = config.get("vault_path", str(BRAIN_DIR / "vault"))
 
     # 1. COLLECT
@@ -555,6 +560,7 @@ def process_session(
         topics, session_data, vault_path, session_id, date, model,
         emit_docs_solutions=emit_docs_solutions,
         handgriff_model=config.get("handgriff_model"),
+        card_v2=bool(config.get("lesson_card_v2", False)),
     )
     logger.info(f"Written {len(write_result.written)} entries")
 

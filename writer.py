@@ -265,6 +265,52 @@ def build_frontmatter(topic: dict, session_id: str, date: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+CARD_V2_TYPES = {"anleitung", "troubleshooting"}
+
+
+def _one_line(value) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def build_card_frontmatter(topic: dict, session_id: str, date: str) -> str:
+    """Frontmatter einer Lektionskarte v2: v1-Felder plus Geltung, Prüfen-wenn, Belegdatum."""
+    lines = build_frontmatter(topic, session_id, date).rstrip("\n").split("\n")
+    assert lines[-1] == "---"
+    lines = [("card_version: 2" if row == "card_version: 1" else row) for row in lines[:-1]]
+    pruefen = [_one_line(p) for p in (topic.get("pruefen_wenn") or []) if _one_line(p)]
+    lines.extend([
+        f"gilt_fuer: {_yaml_double_quoted(_one_line(topic.get('gilt_fuer')))}",
+        "pruefen_wenn: [" + ", ".join(_yaml_double_quoted(p) for p in pruefen) + "]",
+        f"belegt_am: {date}",
+        "---",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def render_card_body(topic: dict, date: str | None = None) -> str:
+    """Deterministischer Karten-Body aus den Analyzer-Feldern; leere Felder fallen weg."""
+    rows = [f"# {_one_line(topic.get('title'))}"]
+    details = []
+    for label, key in (("Problem", "problem"), ("Ursache", "ursache"), ("Fix", "fix"), ("Gilt für", "gilt_fuer")):
+        value = _one_line(topic.get(key))
+        if value:
+            details.append(f"**{label}:** {value}")
+    evidence = _one_line(topic.get("evidence"))
+    if evidence:
+        details.append(f"**Belegt:** {evidence}" + (f" ({date})" if date else ""))
+    pruefen = [_one_line(p) for p in (topic.get("pruefen_wenn") or []) if _one_line(p)]
+    if pruefen:
+        details.append("**Prüfen wenn:** " + ", ".join(pruefen))
+    # Die Lektion steht schon in der Frontmatter (lesson, description). Im Body nur,
+    # wenn der Fix fehlt, sonst wäre sie dreifach in der Datei.
+    if not _one_line(topic.get("fix")):
+        details.insert(0, f"**Lektion:** {_one_line(topic.get('lesson'))}")
+    if details:
+        rows.append("")
+        rows.extend(f"{d}  " if i < len(details) - 1 else d for i, d in enumerate(details))
+    return "\n".join(rows) + "\n"
+
+
 def determine_output_path(vault_path: str, wing: str, slug: str) -> Path:
     """Determine the output file path for a topic."""
     return Path(vault_path) / wing / f"{slug}.md"
@@ -582,6 +628,22 @@ def _write_quarantine(
     return q_path
 
 
+def _carry_over_seen_sessions(existing_path: Path, card_content: str) -> str:
+    """Ersetzt eine Karte einen vorhandenen Eintrag, zählt seen_sessions weiter."""
+    try:
+        import vaultlib
+
+        old_fm = vaultlib.parse_typed_frontmatter(existing_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        old_fm = {}
+    old_seen = old_fm.get("seen_sessions")
+    seen = old_seen + 1 if isinstance(old_seen, int) and old_seen >= 1 else 1
+    logger.info(
+        f"Karte ersetzt Eintrag {existing_path} (card_version {old_fm.get('card_version')!r}, seen_sessions {seen})"
+    )
+    return card_content.replace("\nseen_sessions: 1\n", f"\nseen_sessions: {seen}\n", 1)
+
+
 def write_entries(
     topics: list,
     session_data: dict,
@@ -592,6 +654,7 @@ def write_entries(
     emit_docs_solutions: bool = True,
     handgriff_model: str | None = None,
     fresh_handgriff: bool = False,
+    card_v2: bool = False,
 ) -> WriteResult:
     """Generate and write markdown files for each topic.
 
@@ -712,18 +775,30 @@ def write_entries(
                 existing_content = None
             logger.info(f"Updating existing entry: {output_path}")
 
-        template_file = TYPE_TEMPLATES.get(entry_type, "anleitung.md")
-        system_prompt = _load_system_prompt(template_file)
+        use_card = (
+            card_v2
+            and entry_type in CARD_V2_TYPES
+            and bool(_one_line(topic.get("lesson")))
+        )
+        if use_card:
+            template_file = ""
+            system_prompt = ""
+        else:
+            template_file = TYPE_TEMPLATES.get(entry_type, "anleitung.md")
+            system_prompt = _load_system_prompt(template_file)
 
         if entry_type == "handgriff":
             handgriff_material = build_handgriff_material(topic, session_data)
             base_user_prompt = build_handgriff_prompt(
                 topic, session_data, existing_content, system_name, material=handgriff_material
             )
+        elif use_card:
+            handgriff_material = ""
+            base_user_prompt = ""
         else:
             handgriff_material = ""
             base_user_prompt = build_writer_prompt(topic, session_data, existing_content)
-        logger.info(f"Writing entry: {topic['title']} ({entry_type})")
+        logger.info(f"Writing entry: {topic['title']} ({entry_type}{', Karte' if use_card else ''})")
 
         full_content: str | None = None
         validation: stylecheck.ValidationResult | None = None
@@ -733,7 +808,16 @@ def write_entries(
         beleg_quarantined: bool = False
         pending_beleg: dict | None = None
 
-        for attempt in (1, 2):
+        if use_card:
+            # Karte v2: kein Writer-Aufruf, Inhalt kommt deterministisch aus dem Analyzer-JSON.
+            full_content = build_card_frontmatter(topic, session_id, date) + "\n" + render_card_body(topic, date)
+            if output_path.exists():
+                full_content = _carry_over_seen_sessions(output_path, full_content)
+            validation = stylecheck.validate(full_content, entry_type)
+            if not validation.passed:
+                logger.warning(f"Karte ungültig: {topic['title']} — {validation.errors}")
+
+        for attempt in (() if use_card else (1, 2)):
             if attempt == 1:
                 user_prompt = base_user_prompt
             else:

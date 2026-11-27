@@ -112,6 +112,33 @@ def build_analyzer_prompt(
     return "\n".join(parts)
 
 
+CARD_V2_TEXT_LIMITS = {"problem": 200, "ursache": 200, "fix": 300, "gilt_fuer": 120}
+PRUEFEN_WENN_PREFIXES = ("datei:", "url:", "paket:", "dienst:")
+PRUEFEN_WENN_MAX = 4
+
+
+def _normalize_card_v2_fields(topic: dict) -> None:
+    """Kartenfelder v2 trimmen/kappen; falsche Typen werden None bzw. []."""
+    for field, limit in CARD_V2_TEXT_LIMITS.items():
+        value = topic.get(field)
+        if isinstance(value, str) and value.strip():
+            topic[field] = " ".join(value.split())[:limit]
+        else:
+            topic[field] = None
+    raw = topic.get("pruefen_wenn")
+    cleaned: list[str] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, str):
+                continue
+            item = item.strip()
+            if item.startswith(PRUEFEN_WENN_PREFIXES) and item not in cleaned:
+                cleaned.append(item)
+            if len(cleaned) >= PRUEFEN_WENN_MAX:
+                break
+    topic["pruefen_wenn"] = cleaned
+
+
 def _normalize_analyzer_topics(result: list) -> list:
     """Keep analyzer response backward-compatible while exposing S1 card fields."""
     card_fields = ("lesson", "trigger", "trigger_terms", "evidence", "derivable")
@@ -121,6 +148,7 @@ def _normalize_analyzer_topics(result: list) -> list:
         if isinstance(topic, dict):
             for field in card_fields:
                 topic.setdefault(field, None)
+            _normalize_card_v2_fields(topic)
             if topic.get("type") == "handgriff":
                 for field in handgriff_fields:
                     topic.setdefault(field, None)
@@ -257,6 +285,28 @@ def _record_usage(envelope: dict) -> None:
         pass
 
 
+# --- Thinking-Grenze für die Lesson-Aufrufe ---------------------------------
+# Gemessen 2026-11-27: rund 85 % der Ausgabe-Tokens der Lesson-Aufrufe waren
+# Thinking. brain.py trägt die Grenze aus config.json (lesson_effort,
+# lesson_max_thinking_tokens) fuer das Lesson-Modell hier ein; call_claude
+# reicht sie nur für genau dieses Modell weiter, das Handbuch-Modell
+# (handgriff_model) bleibt unberührt.
+_THINKING_LIMITS: dict[str, dict] = {}
+
+
+def configure_thinking(model: str, max_thinking_tokens: int | None = None, effort: str | None = None) -> None:
+    """Thinking-Grenze für alle call_claude-Aufrufe mit diesem Modell setzen."""
+    limits = {}
+    if max_thinking_tokens is not None:
+        limits["max_thinking_tokens"] = int(max_thinking_tokens)
+    if effort:
+        limits["effort"] = str(effort)
+    if limits:
+        _THINKING_LIMITS[model] = limits
+    else:
+        _THINKING_LIMITS.pop(model, None)
+
+
 def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: str | None = None) -> str:
     """Call Claude CLI in non-interactive mode and return the response text."""
     import os
@@ -296,6 +346,13 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
         cmd.extend(["--json-schema", json_schema])
     cmd.extend(["--output-format", "json"])
 
+    limits = _THINKING_LIMITS.get(model, {})
+    thinking_env: dict[str, str] = {}
+    if limits.get("effort"):
+        cmd.extend(["--effort", limits["effort"]])
+    if limits.get("max_thinking_tokens") is not None:
+        thinking_env["MAX_THINKING_TOKENS"] = str(limits["max_thinking_tokens"])
+
     # Use temp dir as cwd to avoid loading project CLAUDE.md files
     import tempfile
     neutral_cwd = tempfile.gettempdir()
@@ -312,7 +369,7 @@ def call_claude(system_prompt: str, user_prompt: str, model: str, json_schema: s
             shell=(os.name == "nt"),  # shell=True needed on Windows for .cmd files
             # Inject the inference-only setup-token (if configured) so this call
             # never touches the host's rotating login credentials -> no 401 race.
-            env={**os.environ, "CHA0SBRAIN_RUNNING": "1", **_load_inference_token_env()},
+            env={**os.environ, "CHA0SBRAIN_RUNNING": "1", **thinking_env, **_load_inference_token_env()},
         )
     except FileNotFoundError:
         # claude binary not found despite the PATH fallback above — log and
@@ -383,6 +440,11 @@ ANALYZER_SCHEMA = json.dumps({
             "trigger_terms": {"type": ["array", "null"], "items": {"type": "string"}},
             "evidence": {"type": ["string", "null"]},
             "derivable": {"type": ["boolean", "null"]},
+            "problem": {"type": ["string", "null"]},
+            "ursache": {"type": ["string", "null"]},
+            "fix": {"type": ["string", "null"]},
+            "gilt_fuer": {"type": ["string", "null"]},
+            "pruefen_wenn": {"type": ["array", "null"], "items": {"type": "string"}},
             "system": {"type": "string"},
             "aufgabe": {"type": "string"},
             "auch_gesucht_als": {"type": "array", "items": {"type": "string"}},

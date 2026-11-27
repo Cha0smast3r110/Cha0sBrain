@@ -53,6 +53,13 @@ NOT_EVIDENCED_PLACEHOLDER = "noch nicht belegt."
 # das aber regelmaessig (gemessen 2026-10-06: 2 von 4 echten Karten bei 250-400).
 # Die harte Grenze liegt deshalb hoeher, damit eine gute, etwas lange Karte nicht
 # still unbrauchbar wird; 2 Karten bleiben so unter ~700 Zeichen Injektion.
+# Lektionskarte v2 (27.11.2026): kein Tutorial-Body, nur die Karte. Statt der
+# Pflicht-Abschnitte gilt: Lektion- oder Fix-Zeile vorhanden, gültiges Kartenschema, Body kurz.
+# "## Weitere Fälle" (Dedup-Merge) zählt nicht zur Länge.
+CARD_V2_TYPES = {"anleitung", "troubleshooting"}
+CARD_V2_MAX_BODY = 1200
+CARD_V2_BODY_MARKERS = ("**Lektion:**", "**Fix:**")
+
 LESSON_MIN_CHARS = 30
 LESSON_MAX_CHARS = 320
 
@@ -329,6 +336,27 @@ def _check_card_schema(fm: dict | None) -> list[dict]:
     }]
 
 
+def _is_card_v2(fm: dict | None, entry_type: str) -> bool:
+    return isinstance(fm, dict) and fm.get("card_version") == 2 and entry_type in CARD_V2_TYPES
+
+
+def _check_card_v2(fm: dict, body: str) -> list[str]:
+    errors = [f"card_v2_schema: {e}" for e in _card_schema_errors(fm)]
+    core = body.split("\n## Weitere Fälle", 1)[0]
+    if not any(marker in core for marker in CARD_V2_BODY_MARKERS):
+        errors.append("card_v2_body: weder '**Lektion:**' noch '**Fix:**' im Body")
+    import handgriff
+
+    for text in (core, str(fm.get("lesson") or ""), str(fm.get("evidence") or ""), str(fm.get("trigger") or "")):
+        secret = handgriff.find_secret(text)
+        if secret:
+            errors.append(f"secret_pattern: {secret}")
+            break
+    if len(core.strip()) > CARD_V2_MAX_BODY:
+        errors.append(f"card_v2_body: {len(core.strip())} Zeichen > {CARD_V2_MAX_BODY}")
+    return errors
+
+
 def validate(content: str, entry_type: str) -> ValidationResult:
     if entry_type not in VALID_ENTRY_TYPES:
         raise ValueError(f"unknown entry_type: {entry_type!r}")
@@ -354,10 +382,13 @@ def validate(content: str, entry_type: str) -> ValidationResult:
     if err:
         errors.append(err)
 
-    errors.extend(_check_sections(body, entry_type))
+    if _is_card_v2(fm, entry_type):
+        errors.extend(_check_card_v2(fm, body))
+    else:
+        errors.extend(_check_sections(body, entry_type))
+        warnings.extend(_check_card_schema(fm))
     errors.extend(_check_handgriff_schema(fm, body))
 
     warnings.extend(_check_forbidden_phrases(body))
-    warnings.extend(_check_card_schema(fm))
 
     return ValidationResult(passed=not errors, errors=errors, warnings=warnings)

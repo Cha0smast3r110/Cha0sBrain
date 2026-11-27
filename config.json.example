@@ -1,5 +1,7 @@
 {
-  "model": "haiku",
+  "model": "claude-haiku-5-5",
+  "lesson_effort": "low",
+  "lesson_max_thinking_tokens": 1024,
   "vault_path": "/ABSOLUTE/PATH/TO/YOUR/VAULT",
   "log_level": "INFO",
   "push_vault_to_remote": true,

@@ -66,3 +66,43 @@ def test_call_claude_laedt_keinen_globalen_unterbau(monkeypatch):
     assert "--strict-mcp-config" in cmd
     i = cmd.index("--setting-sources")
     assert cmd[i + 1] == ""
+
+
+def test_lesson_aufruf_uebergibt_modell_und_thinking_grenze_aus_config(tmp_path, monkeypatch):
+    # Gemessen 2026-11-27: ~85 % der Ausgabe-Tokens waren Thinking. brain.py
+    # muss Modell und Grenze aus config.json an den CLI-Aufruf durchreichen,
+    # das Handbuch-Modell bleibt dabei ohne Grenze.
+    import json, subprocess
+    import brain
+    calls = []
+
+    class R:
+        returncode = 0
+        stdout = json.dumps({"result": "[]", "usage": {}, "total_cost_usd": 0})
+        stderr = ""
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("env") or {}))
+        return R()
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(analyzer, "_THINKING_LIMITS", {})
+    cfg = {"model": "claude-haiku-5-5", "lesson_effort": "low",
+           "lesson_max_thinking_tokens": 1024, "handgriff_model": "claude-sonnet-5-5",
+           "vault_path": str(tmp_path / "vault")}
+    # Nur die Konfiguration aus brain.process_session ausführen, ohne Pipeline:
+    import logging
+    monkeypatch.setattr(brain, "load_processed_sessions", lambda: {})
+    monkeypatch.setattr(brain, "find_session_file", lambda *a, **k: None)
+    assert brain.process_session("s-test", str(tmp_path), cfg, logging.getLogger("t")) is False
+
+    analyzer.call_claude("sys", "user", cfg["model"])
+    cmd, env = calls[-1]
+    assert cmd[cmd.index("--model") + 1] == "claude-haiku-5-5"
+    assert cmd[cmd.index("--effort") + 1] == "low"
+    assert env.get("MAX_THINKING_TOKENS") == "1024"
+
+    analyzer.call_claude("sys", "user", cfg["handgriff_model"])
+    cmd, env = calls[-1]
+    assert "--effort" not in cmd
+    assert "MAX_THINKING_TOKENS" not in env
